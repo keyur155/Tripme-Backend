@@ -92,7 +92,7 @@ const userSchema = new mongoose.Schema({
       type: String,
       validate: {
         validator: function(v) {
-          return !v || ['aadhar-card', 'voter-id', 'passport', 'utility-bill', 'bank-statement', 'rent-agreement'].includes(v);
+          return !v || ['aadhar-address', 'voter-id', 'passport', 'utility-bill', 'bank-statement', 'rent-agreement'].includes(v);
         },
         message: 'Invalid address proof type'
       }
