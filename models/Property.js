@@ -60,7 +60,7 @@ const propertySchema = new mongoose.Schema({
   },
   placeType: {
     type: String,
-    enum: ['entire', 'room', 'shared'],
+    enum: ['entire', 'room','private', 'shared'],
     default: 'entire'
   },
   images: [{
