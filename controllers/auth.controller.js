@@ -512,7 +512,7 @@ const socialLogin = async (req, res) => {
 
         console.log('Google API response status:', userInfoResponse.status);
         
-        if (!response.ok) {
+        if (!userInfoResponse.ok) {
           const errorText = await response.text();
           console.error('Google API error response:', errorText);
           return res.status(401).json({
@@ -522,7 +522,7 @@ const socialLogin = async (req, res) => {
           });
         }
         
-        const userInfo = await response.json();
+        const userInfo = await userInfoResponse.json();
         console.log('Google API user info received:', {
           hasEmail: !!userInfo.email,
           hasName: !!userInfo.name,
