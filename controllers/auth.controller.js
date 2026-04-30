@@ -511,18 +511,28 @@ const socialLogin = async (req, res) => {
         const userInfoResponse = await fetchGoogleUserInfo(token);
 
         console.log('Google API response status:', userInfoResponse.status);
+
+        if (userInfoResponse.status !== 200) {
+            console.error('Google API error response:', userInfoResponse.data);
+            return res.status(401).json({
+              success: false,
+              message: 'Invalid Google access token',
+              debug: process.env.NODE_ENV === 'development' ? userInfoResponse.data : undefined
+            })
+          }
+        // if (!userInfoResponse.ok) {
+        //   const errorText = await userInfoResponse.text();
+        //   console.error('Google API error response:', errorText);
+        //   return res.status(401).json({
+        //     success: false,
+        //     message: 'Invalid Google access token',
+        //     debug: process.env.NODE_ENV === 'development' ? errorText : undefined
+        //   });
+        // }
+
+        const userInfo = userInfoResponse.data; 
         
-        if (!userInfoResponse.ok) {
-          const errorText = await userInfoResponse.text();
-          console.error('Google API error response:', errorText);
-          return res.status(401).json({
-            success: false,
-            message: 'Invalid Google access token',
-            debug: process.env.NODE_ENV === 'development' ? errorText : undefined
-          });
-        }
-        
-        const userInfo = await userInfoResponse.json();
+        // const userInfo = await userInfoResponse.json();
         console.log('Google API user info received:', {
           hasEmail: !!userInfo.email,
           hasName: !!userInfo.name,
