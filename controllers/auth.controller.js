@@ -513,7 +513,7 @@ const socialLogin = async (req, res) => {
         console.log('Google API response status:', userInfoResponse.status);
         
         if (!userInfoResponse.ok) {
-          const errorText = await response.text();
+          const errorText = await userInfoResponse.text();
           console.error('Google API error response:', errorText);
           return res.status(401).json({
             success: false,
