@@ -1260,36 +1260,70 @@ const razorpayWebhook = async (req, res) => {
   }
 };
 
-// Handle successful Razorpay payment
+// Handle successful Razorpay payment (payment.captured webhook)
 const handleRazorpayPaymentSuccess = async (paymentEntity) => {
   try {
-    const payment = await Payment.findOne({
-      razorpayPaymentId: paymentEntity.id
-    });
+    if (!paymentEntity?.id) {
+      console.warn('⚠️ payment.captured webhook missing payment ID');
+      return;
+    }
 
-    if (payment) {
-      payment.status = 'completed';
-      payment.paymentDetails.gatewayResponse = paymentEntity;
-      await payment.save();
+    const payment = await Payment.findOne({ razorpayPaymentId: paymentEntity.id });
 
-      // Update booking status
-      const booking = await Booking.findById(payment.booking);
-      if (booking) {
+    if (!payment) {
+      console.warn(`⚠️ Payment not found for Razorpay payment ID: ${paymentEntity.id}`);
+      return;
+    }
+
+    // Idempotency: don't re-process already completed payments
+    if (payment.status === 'completed') {
+      console.log(`ℹ️ Payment ${payment._id} already completed. Skipping.`);
+      return;
+    }
+
+    payment.status = 'completed';
+    payment.webhookStatus = 'captured';
+    payment.webhookReceivedAt = new Date();
+    payment.orderStatus = 'paid';
+    payment.processedAt = new Date();
+    payment.paymentDetails = payment.paymentDetails || {};
+    payment.paymentDetails.gatewayResponse = paymentEntity;
+    await payment.save();
+
+    // Confirm the booking
+    const booking = await Booking.findById(payment.booking);
+    if (booking) {
+      if (booking.paymentStatus !== 'paid') {
         booking.paymentStatus = 'paid';
         booking.status = 'confirmed';
         await booking.save();
-      }
+        console.log(`✅ Booking ${booking._id} confirmed via payment.captured webhook`);
 
-      console.log('✅ Razorpay payment confirmed:', payment._id);
+        // Send confirmation email
+        try {
+          const { sendBookingConfirmationEmail } = require('../utils/sendEmail');
+          const populatedBooking = await Booking.findById(booking._id)
+            .populate('user', 'name email')
+            .populate('listing', 'title location images')
+            .populate('service', 'title');
+          if (populatedBooking?.user?.email) {
+            await sendBookingConfirmationEmail(populatedBooking.user.email, populatedBooking);
+          }
+        } catch (emailErr) {
+          console.error('⚠️ Failed to send confirmation email from webhook:', emailErr.message);
+        }
+      }
     } else {
-      console.warn(`⚠️ Payment not found for Razorpay payment ID: ${paymentEntity.id}`);
+      console.warn(`⚠️ Booking ${payment.booking} not found for captured payment ${payment._id}`);
     }
+
+    console.log('✅ Razorpay payment.captured handled:', payment._id);
   } catch (error) {
-    console.error('❌ Error handling Razorpay payment success:', error);
+    console.error('❌ Error handling Razorpay payment.captured:', error);
   }
 };
 
-// Handle Razorpay payment authorized (awaiting capture)
+// Handle Razorpay payment authorized (awaiting capture — e.g. UPI/NetBanking)
 const handleRazorpayPaymentAuthorized = async (paymentEntity) => {
   try {
     if (!paymentEntity?.id) {
@@ -1297,22 +1331,20 @@ const handleRazorpayPaymentAuthorized = async (paymentEntity) => {
       return;
     }
 
-    const payment = await Payment.findOne({
-      razorpayPaymentId: paymentEntity.id
-    });
+    const payment = await Payment.findOne({ razorpayPaymentId: paymentEntity.id });
 
     if (payment) {
-      payment.status = 'processing'; // within enum; capture will mark completed
-      payment.paymentDetails.gatewayResponse = paymentEntity;
-      await payment.save();
-
-      const booking = await Booking.findById(payment.booking);
-      if (booking) {
-        booking.paymentStatus = 'pending';
-        await booking.save();
+      // 'authorized' means money is held but not yet captured (typical for UPI/NetBanking)
+      if (payment.status !== 'completed') {
+        payment.status = 'authorized';
+        payment.webhookStatus = 'authorized';
+        payment.webhookReceivedAt = new Date();
+        payment.paymentDetails = payment.paymentDetails || {};
+        payment.paymentDetails.gatewayResponse = paymentEntity;
+        await payment.save();
       }
 
-      console.log('✅ Razorpay payment authorized (awaiting capture):', payment._id);
+      console.log('⏳ Razorpay payment authorized (awaiting capture):', payment._id);
     } else {
       console.warn(`⚠️ Payment not found for Razorpay payment ID: ${paymentEntity.id}`);
     }
@@ -1399,27 +1431,45 @@ const handleRazorpayOrderPaid = async (orderEntity) => {
   }
 };
 
-// Handle failed Razorpay payment
+// Handle failed Razorpay payment — store full failure details
 const handleRazorpayPaymentFailure = async (paymentEntity) => {
   try {
-    const payment = await Payment.findOne({
-      razorpayPaymentId: paymentEntity.id
-    });
+    if (!paymentEntity?.id) {
+      console.warn('⚠️ payment.failed webhook missing payment ID');
+      return;
+    }
+
+    const payment = await Payment.findOne({ razorpayPaymentId: paymentEntity.id });
 
     if (payment) {
       payment.status = 'failed';
+      payment.webhookStatus = 'failed';
+      payment.webhookReceivedAt = new Date();
+      payment.paymentDetails = payment.paymentDetails || {};
       payment.paymentDetails.gatewayResponse = paymentEntity;
+
+      // Store granular failure details from Razorpay
+      payment.failureDetails = {
+        error_code: paymentEntity.error_code,
+        error_description: paymentEntity.error_description,
+        error_source: paymentEntity.error_source,
+        error_step: paymentEntity.error_step,
+        error_reason: paymentEntity.error_reason,
+        error_metadata: paymentEntity.error_metadata,
+        timestamp: new Date(),
+      };
       await payment.save();
 
-      // Update booking status
+      // Cancel the associated booking
       const booking = await Booking.findById(payment.booking);
-      if (booking) {
+      if (booking && booking.status !== 'cancelled') {
         booking.paymentStatus = 'failed';
         booking.status = 'cancelled';
         await booking.save();
+        console.log(`🚫 Booking ${booking._id} cancelled due to payment failure`);
       }
 
-      // Revert availability
+      // Revert date availability
       try {
         const { updateAvailabilityStatus } = require('./availability.controller');
         await updateAvailabilityStatus(payment.booking, 'available');
@@ -1427,10 +1477,12 @@ const handleRazorpayPaymentFailure = async (paymentEntity) => {
         console.error('Error reverting availability status:', availabilityError);
       }
 
-      console.log('❌ Razorpay payment failed:', payment._id);
+      console.log(`❌ Razorpay payment.failed handled: ${payment._id} | code: ${paymentEntity.error_code} | ${paymentEntity.error_description}`);
+    } else {
+      console.warn(`⚠️ Payment not found for Razorpay payment ID: ${paymentEntity.id}`);
     }
   } catch (error) {
-    console.error('❌ Error handling Razorpay payment failure:', error);
+    console.error('❌ Error handling Razorpay payment.failed:', error);
   }
 };
 
@@ -1864,56 +1916,87 @@ const updatePaymentStatus = async (req, res) => {
   }
 };
 
-// @desc    Handle payment failure and revert availability
+// @desc    Handle payment failure reported by frontend (user cancelled or Razorpay error)
 // @route   POST /api/payments/:paymentId/fail
 // @access  Private
 const handlePaymentFailure = async (req, res) => {
   try {
     const { paymentId } = req.params;
-    
-    const payment = await Payment.findById(paymentId);
+    const {
+      error_code,
+      error_description,
+      error_source,
+      error_step,
+      error_reason,
+      razorpayOrderId,
+      razorpayPaymentId,
+    } = req.body;
+
+    // Find by DB id OR by razorpay order id (whichever frontend has)
+    let payment = await Payment.findById(paymentId).catch(() => null);
+    if (!payment && razorpayOrderId) {
+      payment = await Payment.findOne({ razorpayOrderId });
+    }
+
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
-    if (payment.user.toString() !== req.user._id) {
+
+    if (payment.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
-    
-    // Mark payment as failed
+
+    // Idempotency: already failed
+    if (payment.status === 'failed') {
+      return res.status(200).json({ success: true, message: 'Payment already marked as failed' });
+    }
+
+    // Store failure details
     payment.status = 'failed';
+    payment.failureDetails = {
+      error_code: error_code || 'CANCELLED',
+      error_description: error_description || 'User cancelled or payment failed',
+      error_source: error_source || 'customer',
+      error_step: error_step || 'payment_authentication',
+      error_reason: error_reason || 'user_cancelled',
+      timestamp: new Date(),
+    };
+    if (razorpayPaymentId && !payment.razorpayPaymentId) {
+      payment.razorpayPaymentId = razorpayPaymentId;
+    }
     await payment.save();
-    
-    // Update booking status
+
+    // Cancel the associated booking
     if (payment.booking) {
       const booking = await Booking.findById(payment.booking);
-      if (booking) {
+      if (booking && booking.status !== 'cancelled') {
         booking.paymentStatus = 'failed';
         booking.status = 'cancelled';
         await booking.save();
+        console.log(`🚫 Booking ${booking._id} cancelled due to frontend payment failure report`);
       }
-    }
-    
-    // Revert availability to 'available'
-    if (payment.booking) {
+
+      // Revert date availability
       try {
         const { updateAvailabilityStatus } = require('./availability.controller');
         await updateAvailabilityStatus(payment.booking, 'available');
       } catch (availabilityError) {
-        console.error('Error reverting availability status:', availabilityError);
-        // Don't fail the payment failure handling if availability update fails
+        console.error('Error reverting availability:', availabilityError);
       }
     }
-    
+
+    console.log(`❌ Payment ${payment._id} marked as failed by frontend | ${error_code}: ${error_description}`);
+
     res.status(200).json({
       success: true,
-      message: 'Payment failure handled successfully'
+      message: 'Payment failure recorded',
+      failureDetails: payment.failureDetails,
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: 'Error handling payment failure',
-      error: error.message
+      error: error.message,
     });
   }
 };

@@ -87,6 +87,31 @@ setTimeout(async () => {
   }
 }, 5000); // Wait 5 seconds after startup
 
+// ──────────────────────────────────────────────────────────
+// Payment Reconciliation Cron — runs every 12 minutes
+// Recovers stuck payments: UPI delays, webhook failures,
+// "money deducted but booking not created" scenarios
+// ──────────────────────────────────────────────────────────
+const { runReconciliation } = require('./services/paymentReconciliation.service');
+
+setInterval(async () => {
+  try {
+    await runReconciliation();
+  } catch (error) {
+    console.error('❌ Error in reconciliation cron:', error);
+  }
+}, 12 * 60 * 1000); // 12 minutes
+
+// Run reconciliation once on startup (after 30s to let DB connect)
+setTimeout(async () => {
+  try {
+    console.log('🔄 Running startup payment reconciliation...');
+    await runReconciliation();
+  } catch (error) {
+    console.error('❌ Error in startup reconciliation:', error);
+  }
+}, 30 * 1000);
+
 // Security middleware setup
 const helmet = createHelmet();
 const rateLimiters = createRateLimiters();
