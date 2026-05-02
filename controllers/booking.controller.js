@@ -29,7 +29,6 @@ const {
   sendHostStatusUpdateEmail
 } = require('../utils/sendEmail');
 const { generateReceipt, generateReceiptHTML } = require('../utils/generateReceipt');
-const { PRICING_CONFIG } = require('../config/pricing.config');
 
 // Helper function to map Refund model status to Booking model refundStatus enum
 // Refund model: ['pending', 'approved', 'processing', 'completed', 'failed', 'rejected', 'cancelled']

@@ -4,7 +4,7 @@
  */
 
 const PricingConfig = require('../models/PricingConfig');
-const { PRICING_CONFIG } = require('../config/pricing.config');
+const { logger } = require('../config/logger');
 
 /**
  * Round to two decimal places consistently
@@ -24,9 +24,8 @@ async function getCurrentPlatformFeeRate() {
     const rate = await PricingConfig.getCurrentPlatformFeeRate();
     return rate;
   } catch (error) {
-    console.error('❌ Error fetching platform fee rate:', error);
-    console.warn('⚠️ Using fallback platform fee rate: 3%');
-    return 0.03; // Fallback with warning
+    logger.error('Error fetching platform fee rate, using model default', { error: error.message });
+    return 0.03; // Schema default fallback
   }
 }
 
@@ -39,12 +38,13 @@ async function getCurrentFeeConfig() {
     const cfg = await PricingConfig.getCurrentPricingConfig();
     return cfg;
   } catch (error) {
-    console.error('❌ Error fetching pricing config:', error);
+    logger.error('Error fetching pricing config, using PricingConfig schema defaults', { error: error.message });
+    // Return the same defaults defined in the PricingConfig model schema
     return {
-      platformFeeRate: PRICING_CONFIG.PLATFORM_FEE_RATE,
-      gstRate: PRICING_CONFIG.GST_RATE,
-      processingFeeRate: PRICING_CONFIG.PROCESSING_FEE_RATE,
-      processingFeeFixed: PRICING_CONFIG.PROCESSING_FEE_FIXED
+      platformFeeRate: 0.03,
+      gstRate: 0.18,
+      processingFeeRate: 0.029,
+      processingFeeFixed: 30
     };
   }
 }

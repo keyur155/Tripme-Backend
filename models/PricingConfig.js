@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { logger } = require('../config/logger');
 
 const pricingConfigSchema = new mongoose.Schema({
   // Platform fee configuration
@@ -93,7 +94,7 @@ pricingConfigSchema.statics.getCurrentPlatformFeeRate = async function() {
   
   if (!activeConfig) {
     // Fallback to default rate if no active config found
-    console.warn('⚠️ No active pricing config found, using default platform fee rate: 3%');
+    logger.warn('No active pricing config found, using schema default platform fee rate: 3%');
     return 0.03;
   }
   
@@ -168,7 +169,7 @@ pricingConfigSchema.statics.updatePlatformFeeRate = async function(
   
   await newConfig.save();
   
-  console.log(`✅ Platform fee rate updated to ${(newRate * 100).toFixed(1)}% by admin ${adminUserId}`);
+  logger.info(`Platform fee rate updated to ${(newRate * 100).toFixed(1)}%`, { adminUserId });
   
   return newConfig;
 };

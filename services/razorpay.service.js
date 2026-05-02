@@ -6,21 +6,22 @@
 let razorpayInstance = null;
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
+const { logger } = require('../config/logger');
 function initializeRazorpay() {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   
   if (!keyId || !keySecret) {
-    console.error('❌ Razorpay ENV missing!');
-    console.error('   RAZORPAY_KEY_ID present:', !!keyId, keyId ? `(${keyId.substring(0, 8)}...)` : '');
-    console.error('   RAZORPAY_KEY_SECRET present:', !!keySecret, keySecret ? '(hidden)' : '');
-    console.error('   Please set these environment variables on your server.');
+    logger.error('Razorpay ENV missing', {
+      keyIdPresent: !!keyId,
+      keySecretPresent: !!keySecret,
+    });
     return;
   }
   
   // Validate key format
   if (!keyId.startsWith('rzp_')) {
-    console.error('❌ Invalid RAZORPAY_KEY_ID format. Should start with "rzp_live_" or "rzp_test_"');
+    logger.error('Invalid RAZORPAY_KEY_ID format. Should start with rzp_live_ or rzp_test_');
     return;
   }
 
@@ -30,7 +31,7 @@ function initializeRazorpay() {
       key_id: process.env.RAZORPAY_KEY_ID,
       key_secret: process.env.RAZORPAY_KEY_SECRET,
     });
-    console.log('✅ Razorpay initialized successfully');
+    logger.info('Razorpay initialized successfully');
   }
 }
 
@@ -80,16 +81,6 @@ async function fetchPaymentStatus(paymentId) {
   }
   return razorpayInstance.payments.fetch(paymentId);
 }
-
-// function verifyPayment(body, signature, secret) {
-//   if (!secret) throw new Error('Webhook secret required');
-//   const crypto = require('crypto');
-//   const expectedSignature = crypto
-//     .createHmac('sha256', secret)
-//     .update(body)
-//     .digest('hex');
-//   return expectedSignature === signature;
-// }
 
 function verifyPayment(orderId, paymentId, signature) {
     const generatedSignature = crypto
@@ -166,7 +157,7 @@ async function createRefund(paymentId, amount, notes = '', meta = {}) {
       const payment = await razorpayInstance.payments.fetch(paymentId);
       return payment;
     } catch (error) {
-      console.error('❌ Error fetching Razorpay payment details:', error);
+      logger.error('Error fetching Razorpay payment details', { paymentId, error: error.message });
       throw error;
     }
   }

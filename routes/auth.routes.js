@@ -4,23 +4,6 @@ const authController = require('../controllers/auth.controller');
 const { auth } = require('../middlewares/auth.middleware');
 const { validateRegistration, validateLogin, validatePasswordReset } = require('../validations/auth.validation');
 
-// Test route
-router.get('/test', (req, res) => {
-  res.json({ message: 'Auth routes working' });
-});
-
-// Debug route for Google login
-router.post('/google-debug', (req, res) => {
-  console.log('Google debug endpoint hit');
-  console.log('Request body:', req.body);
-  console.log('Request headers:', req.headers);
-  res.json({ 
-    message: 'Google debug endpoint working',
-    body: req.body,
-    headers: req.headers
-  });
-});
-
 // Public routes
 router.post('/register', validateRegistration, authController.registerUser);
 router.post('/login', validateLogin, authController.loginUser);

@@ -4,6 +4,11 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { validatePassword } = require('../config/security.config');
+const { logger } = require('../config/logger');
+
+const MAX_SUSPICIOUS_IPS = 5000;
+const MAX_BLOCKED_IPS = 5000;
+const MAX_REASONS_PER_IP = 20;
 
 // Enhanced security middleware for production
 class EnhancedSecurityMiddleware {
@@ -54,6 +59,12 @@ class EnhancedSecurityMiddleware {
 
   // Track suspicious IP addresses
   trackSuspiciousIP(ip, reason) {
+    // Evict oldest entries if map is at capacity
+    if (!this.suspiciousIPs.has(ip) && this.suspiciousIPs.size >= MAX_SUSPICIOUS_IPS) {
+      const oldestKey = this.suspiciousIPs.keys().next().value;
+      this.suspiciousIPs.delete(oldestKey);
+    }
+
     if (!this.suspiciousIPs.has(ip)) {
       this.suspiciousIPs.set(ip, {
         count: 0,
@@ -65,13 +76,18 @@ class EnhancedSecurityMiddleware {
 
     const record = this.suspiciousIPs.get(ip);
     record.count++;
-    record.reasons.push({ reason, timestamp: Date.now() });
+    // Cap reasons array to prevent per-IP memory growth
+    if (record.reasons.length < MAX_REASONS_PER_IP) {
+      record.reasons.push({ reason, timestamp: Date.now() });
+    }
     record.lastSeen = Date.now();
 
     // Block IP if too many suspicious activities
     if (record.count >= 10) {
-      this.blockedIPs.add(ip);
-      console.log(`🚨 IP ${ip} blocked due to suspicious activity:`, record);
+      if (this.blockedIPs.size < MAX_BLOCKED_IPS) {
+        this.blockedIPs.add(ip);
+      }
+      logger.warn(`IP blocked due to suspicious activity`, { ip, count: record.count });
     }
   }
 
@@ -442,8 +458,7 @@ class EnhancedSecurityMiddleware {
           processingTime: Date.now() - req.startTime
         };
 
-        // Log to console for development
-        console.log(`🔒 AUDIT [${level.toUpperCase()}]:`, JSON.stringify(auditData, null, 2));
+        logger.info(`AUDIT [${level.toUpperCase()}]`, { audit: auditData });
 
         // In production, you'd want to store this in a secure audit log
         // await auditService.logAction(auditData);
@@ -487,8 +502,9 @@ class EnhancedSecurityMiddleware {
 const enhancedSecurity = new EnhancedSecurityMiddleware();
 
 // Clean up old records every hour
-setInterval(() => {
+const _cleanupInterval = setInterval(() => {
   enhancedSecurity.cleanupOldRecords();
 }, 60 * 60 * 1000);
+_cleanupInterval.unref();
 
 module.exports = enhancedSecurity;

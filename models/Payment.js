@@ -292,9 +292,9 @@ paymentSchema.pre('save', function(next) {
     if (this.pricingBreakdown?.customerBreakdown?.platformFee && this.subtotal > 0) {
       // Calculate rate from stored breakdown
       platformFeeRate = this.pricingBreakdown.customerBreakdown.platformFee / this.subtotal;
-      console.log(`✅ Using platform fee rate from pricing breakdown: ${(platformFeeRate * 100).toFixed(1)}%`);
+      // Rate derived from pricing breakdown
     } else {
-      console.warn('⚠️ No pricing breakdown found, using fallback platform fee rate: 15%');
+      // No pricing breakdown found, using fallback platform fee rate: 15%
     }
     
     this.commission.platformFee = Math.round(this.subtotal * platformFeeRate * 100) / 100;

@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const Booking = require('../models/Booking');
 const razorpayService = require('./razorpay.service');
+const { logger } = require('../config/logger');
 
 const MAX_RECONCILIATION_ATTEMPTS = 5;
 const STALE_THRESHOLD_MINUTES = 5; // Only reconcile payments older than 5 minutes
@@ -19,7 +20,7 @@ const STALE_THRESHOLD_MINUTES = 5; // Only reconcile payments older than 5 minut
  */
 async function runReconciliation() {
   const jobStart = Date.now();
-  console.log(`\n🔄 [RECONCILIATION] Starting payment reconciliation job at ${new Date().toISOString()}`);
+  logger.info('Starting payment reconciliation job');
 
   try {
     const staleThreshold = new Date(Date.now() - STALE_THRESHOLD_MINUTES * 60 * 1000);
@@ -36,11 +37,11 @@ async function runReconciliation() {
     }).limit(50); // Process at most 50 per run to avoid overloading Razorpay API
 
     if (stalePayments.length === 0) {
-      console.log('✅ [RECONCILIATION] No stale payments found. All clear.');
+      logger.debug('No stale payments found');
       return;
     }
 
-    console.log(`🔍 [RECONCILIATION] Found ${stalePayments.length} stale payment(s) to reconcile.`);
+    logger.info(`Found ${stalePayments.length} stale payment(s) to reconcile`);
 
     let reconciled = 0;
     let failed = 0;
@@ -53,7 +54,7 @@ async function runReconciliation() {
         else if (result === 'failed') failed++;
         else skipped++;
       } catch (err) {
-        console.error(`❌ [RECONCILIATION] Error reconciling payment ${payment._id}:`, err.message);
+        logger.error('Error reconciling payment', { paymentId: payment._id, error: err.message });
         // Increment attempt counter even on error so we don't keep retrying broken payments
         await Payment.findByIdAndUpdate(payment._id, {
           $inc: { reconciliationAttempts: 1 }
@@ -62,9 +63,9 @@ async function runReconciliation() {
     }
 
     const elapsed = ((Date.now() - jobStart) / 1000).toFixed(1);
-    console.log(`✅ [RECONCILIATION] Job complete in ${elapsed}s — reconciled:${reconciled} failed:${failed} skipped:${skipped}`);
+    logger.info(`Reconciliation complete in ${elapsed}s`, { reconciled, failed, skipped });
   } catch (err) {
-    console.error('❌ [RECONCILIATION] Job error:', err.message);
+    logger.error('Reconciliation job error', { error: err.message });
   }
 }
 
@@ -80,7 +81,7 @@ async function reconcilePayment(payment) {
   try {
     rzpPayment = await razorpayService.getPaymentDetails(rzpPaymentId);
   } catch (fetchErr) {
-    console.warn(`⚠️ [RECONCILIATION] Could not fetch Razorpay status for ${rzpPaymentId}: ${fetchErr.message}`);
+    logger.warn('Could not fetch Razorpay status', { rzpPaymentId, error: fetchErr.message });
     await Payment.findByIdAndUpdate(payment._id, {
       $inc: { reconciliationAttempts: 1 }
     });
@@ -88,7 +89,7 @@ async function reconcilePayment(payment) {
   }
 
   const rzpStatus = rzpPayment?.status; // 'created' | 'authorized' | 'captured' | 'refunded' | 'failed'
-  console.log(`📊 [RECONCILIATION] Payment ${payment._id} → Razorpay status: ${rzpStatus}`);
+  logger.info('Reconciliation payment status', { paymentId: payment._id, rzpStatus });
 
   await Payment.findByIdAndUpdate(payment._id, {
     $inc: { reconciliationAttempts: 1 },
@@ -106,7 +107,7 @@ async function reconcilePayment(payment) {
       status: 'authorized',
       webhookStatus: 'authorized',
     });
-    console.log(`⏳ [RECONCILIATION] Payment ${payment._id} is authorized (UPI/NetBanking pending capture)`);
+    logger.info('Payment authorized, pending capture', { paymentId: payment._id });
     return 'skipped';
   }
 
@@ -115,7 +116,7 @@ async function reconcilePayment(payment) {
   }
 
   // 'created' status means user hasn't even attempted payment yet — skip
-  console.log(`ℹ️ [RECONCILIATION] Payment ${payment._id} has status '${rzpStatus}' — no action needed`);
+  logger.debug('Payment status no action needed', { paymentId: payment._id, rzpStatus });
   return 'skipped';
 }
 
@@ -126,7 +127,7 @@ async function handleCapturedPayment(payment, rzpPayment) {
   // Check if booking already exists and is confirmed
   const existingBooking = await Booking.findById(payment.booking);
   if (existingBooking && ['confirmed', 'pending'].includes(existingBooking.status) && existingBooking.paymentStatus === 'paid') {
-    console.log(`ℹ️ [RECONCILIATION] Booking ${payment.booking} already exists and confirmed. Skipping.`);
+    logger.debug('Booking already confirmed, skipping', { bookingId: payment.booking });
     // Just ensure payment status is marked complete
     await Payment.findByIdAndUpdate(payment._id, {
       status: 'completed',
@@ -136,7 +137,7 @@ async function handleCapturedPayment(payment, rzpPayment) {
     return 'skipped';
   }
 
-  console.log(`💰 [RECONCILIATION] Payment ${payment._id} is captured! Confirming booking ${payment.booking}...`);
+  logger.info('Payment captured, confirming booking', { paymentId: payment._id, bookingId: payment.booking });
 
   // Update payment to completed
   await Payment.findByIdAndUpdate(payment._id, {
@@ -152,7 +153,7 @@ async function handleCapturedPayment(payment, rzpPayment) {
     existingBooking.paymentStatus = 'paid';
     existingBooking.status = 'confirmed';
     await existingBooking.save();
-    console.log(`✅ [RECONCILIATION] Booking ${existingBooking._id} confirmed via reconciliation.`);
+    logger.info('Booking confirmed via reconciliation', { bookingId: existingBooking._id });
 
     // Send confirmation email
     try {
@@ -163,10 +164,10 @@ async function handleCapturedPayment(payment, rzpPayment) {
         .populate('service', 'title');
       if (populatedBooking?.user?.email) {
         await sendBookingConfirmationEmail(populatedBooking.user.email, populatedBooking);
-        console.log(`📧 [RECONCILIATION] Confirmation email sent to ${populatedBooking.user.email}`);
+        logger.info('Confirmation email sent via reconciliation');
       }
     } catch (emailErr) {
-      console.error('⚠️ [RECONCILIATION] Failed to send confirmation email:', emailErr.message);
+      logger.warn('Failed to send confirmation email during reconciliation', { error: emailErr.message });
     }
   }
 
@@ -177,7 +178,7 @@ async function handleCapturedPayment(payment, rzpPayment) {
  * Handle a failed payment — mark everything accordingly.
  */
 async function handleFailedPayment(payment, rzpPayment) {
-  console.log(`❌ [RECONCILIATION] Payment ${payment._id} has FAILED in Razorpay.`);
+  logger.warn('Payment failed in Razorpay', { paymentId: payment._id });
 
   const failureDetails = {
     error_code: rzpPayment.error_code,
@@ -200,14 +201,14 @@ async function handleFailedPayment(payment, rzpPayment) {
       paymentStatus: 'failed',
       status: 'cancelled',
     });
-    console.log(`🚫 [RECONCILIATION] Booking ${payment.booking} cancelled due to payment failure.`);
+    logger.info('Booking cancelled due to payment failure', { bookingId: payment.booking });
 
     // Revert availability
     try {
       const { updateAvailabilityStatus } = require('../controllers/availability.controller');
       await updateAvailabilityStatus(payment.booking, 'available');
     } catch (availErr) {
-      console.error('⚠️ [RECONCILIATION] Failed to revert availability:', availErr.message);
+      logger.warn('Failed to revert availability', { bookingId: payment.booking, error: availErr.message });
     }
   }
 

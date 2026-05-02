@@ -3,6 +3,8 @@ const helmet = require('helmet');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const Admin = require('../models/Admin');
+const { logger } = require('../config/logger');
+const { config } = require('../config/index');
 
 // Rate limiting for admin endpoints
 const adminRateLimit = rateLimit({
@@ -186,8 +188,7 @@ const auditLog = (action) => {
         success: data.success || false
       };
 
-      // In production, you'd want to log this to a secure audit log
-      console.log('AUDIT LOG:', JSON.stringify(auditData, null, 2));
+      logger.info('AUDIT LOG', { audit: auditData });
       
       originalSend.call(this, data);
     };
@@ -336,13 +337,23 @@ const securityMiddleware = {
       return next(); // GET requests are generally safe
     }
     
+    // Build trusted origins from config (no hardcoded domains)
+    const trustedOrigins = [];
+    if (config.frontendUrl) {
+      config.frontendUrl.split(',').forEach(u => trustedOrigins.push(u.trim()));
+    }
+    trustedOrigins.push(...config.allowedOrigins);
+    if (config.isDevelopment) trustedOrigins.push('localhost');
+
+    const matchesTrusted = (url) => trustedOrigins.some(t => url.includes(t));
+
     // For POST/PUT/DELETE requests, check origin
-    if (origin && (origin.includes('localhost') || origin.includes('tripme.com'))) {
+    if (origin && matchesTrusted(origin)) {
       return next();
     }
     
     // If no origin but has referer, check referer
-    if (!origin && referer && (referer.includes('localhost') || referer.includes('tripme.com'))) {
+    if (!origin && referer && matchesTrusted(referer)) {
       return next();
     }
     
@@ -371,7 +382,7 @@ const securityMiddleware = {
         userAgent: req.get('User-Agent')
       };
       
-      console.log('🔒 Security Audit:', logData);
+      logger.debug('Security Audit', logData);
       
       // You could also log to a file or external service here
       
