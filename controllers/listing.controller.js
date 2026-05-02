@@ -6,6 +6,64 @@ const Wishlist = require('../models/Wishlist');
 const Notification = require('../models/Notification');
 const slugify = require('slugify');
 
+
+// helper function to count badges 
+const generateBadges = (listing) => {
+  const badges = [];
+
+  if (listing.stats?.views > 1000) {
+    badges.push({
+      type: "trending",
+      label: "Trending",
+      description: "This listing is getting a lot of attention."
+    });
+  }
+
+  if (listing.stats?.bookings > 50) {
+    badges.push({
+      type: "popular",
+      label: "Popular choice",
+      description: "Guests frequently book this place."
+    });
+  }
+
+  if (listing.stats?.bookingsLast7Days > 5) {
+    badges.push({
+      type: "high_demand",
+      label: "High demand",
+      description: "Booked multiple times recently."
+    });
+  }
+
+  if (listing.availability?.remainingSlots < 3) {
+    badges.push({
+      type: "rare",
+      label: "Rare find",
+      description: "Limited availability left."
+    });
+  }
+
+  if (listing.ratings?.avgRating >= 4.5) {
+    badges.push({
+      type: "rating",
+      label: "Highly rated",
+      description: "Guests love this place."
+    });
+  }
+
+  const daysSinceCreated =
+    (Date.now() - new Date(listing.createdAt)) / (1000 * 60 * 60 * 24);
+
+  if (daysSinceCreated < 15) {
+    badges.push({
+      type: "new",
+      label: "New",
+      description: "Recently added listing."
+    });
+  }
+
+  return badges;
+};
 // Helper function to transform listing data for frontend
 const transformListingForFrontend = (listing) => {
   const transformed = listing.toObject ? listing.toObject() : listing;
@@ -40,7 +98,8 @@ const transformListingForFrontend = (listing) => {
     location: {
       ...transformed.location,
       coordinates: transformed.location?.coordinates || transformed.coordinates
-    }
+    },
+    badges: transformed.badges
   };
 };
 
@@ -519,6 +578,19 @@ const getListing = async (req, res) => {
       responseData = listingObj;
     } else {
       responseData = transformListingForFrontend(listing);
+     responseData.badges = {
+  highlight: [{ label: "Guest favourite", icon: "🌿" }],
+  details: [
+    { label: "Exceptional check-in", icon: "🔑" },
+    { label: "Great location", icon: "📍" }
+  ],
+  insights: [
+    { label: "Price is lower than average", icon: "🏷️" }
+  ],
+  urgency: [
+    { label: "Only 1 left", icon: "⚡" }
+  ]
+};
     }
     
 

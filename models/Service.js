@@ -69,7 +69,12 @@ const serviceSchema = new mongoose.Schema({
   availableSlots: [{
     startTime: Date,
     endTime: Date,
-    isAvailable: Boolean
+    isAvailable: { type: Boolean, default: true },
+    status: {
+      type: String,
+      enum: ['available', 'unavailable', 'on-hold', 'booked'],
+      default: 'available'
+    }
   }],
   pricing: {
     basePrice: {

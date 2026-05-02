@@ -1,4 +1,7 @@
 const Admin = require('../models/Admin');
+const { logger } = require('../config/logger');
+
+const MAX_IN_MEMORY_LOGS = 500;
 
 class AuditService {
   constructor() {
@@ -22,21 +25,18 @@ class AuditService {
         sessionId: details.sessionId
       };
 
-      // In production, you'd want to store this in a separate audit collection
-      // For now, we'll log to console and could store in database
-      console.log('🔒 AUDIT LOG:', JSON.stringify(auditLog, null, 2));
+      logger.info('AUDIT', { audit: auditLog });
 
-      // Store in memory (for development)
       this.logs.push(auditLog);
 
-      // Keep only last 1000 logs in memory
-      if (this.logs.length > 1000) {
-        this.logs = this.logs.slice(-1000);
+      // Cap in-memory buffer to prevent unbounded growth
+      if (this.logs.length > MAX_IN_MEMORY_LOGS) {
+        this.logs = this.logs.slice(-MAX_IN_MEMORY_LOGS);
       }
 
       return auditLog;
     } catch (error) {
-      console.error('Error logging audit action:', error);
+      logger.error('Error logging audit action', { error: error.message });
     }
   }
 
@@ -77,8 +77,13 @@ class AuditService {
       success: false
     };
 
-    console.log('🚨 FAILED AUTH:', JSON.stringify(auditLog, null, 2));
+    logger.warn('FAILED AUTH', { audit: auditLog });
     this.logs.push(auditLog);
+
+    // Cap buffer
+    if (this.logs.length > MAX_IN_MEMORY_LOGS) {
+      this.logs = this.logs.slice(-MAX_IN_MEMORY_LOGS);
+    }
   }
 
   // Log successful authentication

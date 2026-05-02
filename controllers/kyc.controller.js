@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Host = require('../models/Host');
 const KycVerification = require('../models/KycVerification');
 const Notification = require('../models/Notification');
 const { sendEmail } = require('../utils/sendEmail');
@@ -187,7 +188,7 @@ const updateKYC = async (req, res) => {
     } = req.body;
 
     const user = await User.findById(req.user.id);
-
+    
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -218,6 +219,7 @@ const updateKYC = async (req, res) => {
     
     // Reset status to pending for new submission
     user.kyc.status = 'pending';
+
 
     await user.save();
 
@@ -368,6 +370,7 @@ const verifyKYC = async (req, res) => {
 
 
     const user = await User.findById(userId);
+    const host = await Host.findOne({ user: user._id });
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -402,6 +405,11 @@ const verifyKYC = async (req, res) => {
         verifiedAt: new Date()
       }
     );
+
+    if(status === 'verified'){
+      host.isVerified = true;
+      await host.save();
+    }
 
     // Create notification for user
     await Notification.create({

@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Admin = require('../models/Admin');
+const { logger } = require('../config/logger');
 
 const auth = async (req, res, next) => {
   try {
@@ -33,8 +34,6 @@ const auth = async (req, res, next) => {
         });
       }
 
-      console.log('🔍 Admin object from DB:', admin);
-      console.log('🔍 Admin role:', admin.role);
       req.user = admin;
       req.isAdmin = true;
     } else {
@@ -76,6 +75,7 @@ const auth = async (req, res, next) => {
       });
     }
     
+    logger.error('Auth middleware error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Server error.'

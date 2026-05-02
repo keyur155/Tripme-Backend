@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const { ObjectId } = mongoose.Types; 
 const Host = require('../models/Host');
 const User = require('../models/User');
+const Property = require('../models/Property');
 
 // @desc    Get host profile by ID
 // @route   GET /api/hosts/:id
@@ -128,6 +129,33 @@ const getHostProfile = async (req, res) => {
   }
 };
 
+const getHostListings = async(req, res) =>{
+
+  try {
+        const {id} =  req.params;
+
+        const listing = await Property.find({host:id})
+        .select('title images pricing location')
+        .populate('host', 'name email profileImage phone location bio languages')
+        console.log("listing",listing); 
+         res.status(200).json({
+          success: true,
+          data: listing
+         })
+        
+
+  } catch (error) {
+    console.log('💥 Error in getHostListing:', error); // Debug log
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+
+}
+
 module.exports = {
-  getHostProfile
+  getHostProfile,
+  getHostListings
 };

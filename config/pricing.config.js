@@ -7,17 +7,10 @@ const PricingConfig = require('../models/PricingConfig');
 const { toTwoDecimals, getCurrentPlatformFeeRate, calculatePricingBreakdown, calculateHourlyExtension, validatePricingConsistency } = require('../utils/pricingUtils');
 
 const PRICING_CONFIG = {
-  // Platform fees (percentage of subtotal) - NOW DYNAMIC
-  PLATFORM_FEE_RATE: 0.15, // 15% TripMe service fee (fallback value)
-  PROCESSING_FEE_RATE: 0.029, // 2.9% processing fee
-  PROCESSING_FEE_FIXED: 30, // ₹30 fixed processing fee
-  
-  // Tax rates (fallback/defaults, overridable via PricingConfig)
-  GST_RATE: 0.18, // 18% GST (Goods and Services Tax)
-  
-  // Default service fees (if not set by host)
-  DEFAULT_SERVICE_FEE_RATE: 0.05, // 5% of base price
-  
+  // NOTE: Fee rates (platformFeeRate, gstRate, processingFeeRate, processingFeeFixed)
+  // are now managed exclusively via the PricingConfig DB model.
+  // Use PricingConfig.getCurrentPricingConfig() to fetch them at runtime.
+
   // Currency settings
   DEFAULT_CURRENCY: 'INR',
   SUPPORTED_CURRENCIES: ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD'],

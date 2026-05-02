@@ -20,5 +20,6 @@ router.post('/profile/image', (req, res) => {
 });
 
 router.get('/profile/:id', hostController.getHostProfile);
+router.get('/profile/listings/:id', hostController.getHostListings);
 
 module.exports = router; 

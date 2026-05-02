@@ -1,143 +1,71 @@
-require('dotenv').config();
+// ──────────────────────────────────────────────────────────
+// TripMe Backend — Production-Ready Server
+// ──────────────────────────────────────────────────────────
+const { config, validateEnv } = require('./config/index');
+const { logger, requestLogger } = require('./config/logger');
+
+// Fail fast if required env vars are missing
+validateEnv();
+
 const express = require('express');
-const razorpayService = require('./services/razorpay.service');
 const cors = require('cors');
-const path = require('path');
+const compression = require('compression');
+const mongoose = require('mongoose');
 const connectDB = require('./config/db');
-const app = express();
-const mongoose = require('mongoose'); // Added missing import for mongoose
-
-// HOTFIX: Manually set Razorpay env vars if they're missing
-if (!process.env.RAZORPAY_KEY_ID) {
-  console.log('⚠️ Setting RAZORPAY_KEY_ID manually as fallback');
-  // Using test mode keys instead of live mode
-  process.env.RAZORPAY_KEY_ID = 'rzp_test_UPWbFB9Cxs7D1v';
-}
-if (!process.env.RAZORPAY_KEY_SECRET) {
-  console.log('⚠️ Setting RAZORPAY_KEY_SECRET manually as fallback');
-  // Using test mode keys instead of live mode
-  process.env.RAZORPAY_KEY_SECRET = 'JxZQEZVFnPOHPpLWGlwYQyXY';
-}
-
-// Security imports
+const razorpayService = require('./services/razorpay.service');
 const { createHelmet, createRateLimiters, securityConfig } = require('./config/security.config');
-const auditService = require('./services/audit.service');
+const { runReconciliation } = require('./services/paymentReconciliation.service');
 
-// Environment variables validation
-const requiredEnvVars = ['MONGO_URI', 'JWT_SECRET', 'PORT'];
-const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+const app = express();
 
-if (missingEnvVars.length > 0) {
-  console.error('❌ Missing required environment variables:', missingEnvVars);
-  process.exit(1);
-}
+// Trust reverse proxy (Railway, Render, etc.)
+app.set('trust proxy', config.trustProxy);
 
-const port = process.env.PORT;
+// ── Security middleware ────────────────────────────────────
+app.use(createHelmet());
+app.use(compression());
 
-console.log('🚀 Starting TripMe Backend Server...');
-console.log('Environment:', process.env.NODE_ENV || 'production');
-console.log('Port:', port);
-console.log('Frontend URL:', process.env.FRONTEND_URL);
-
-// console.log(
-//   'Razorpay ready at boot?',
-//   razorpayService.isInitialized()
-// );
-
-console.log(
-  'Razorpay lazy init mode. Env present:',
-  !!process.env.RAZORPAY_KEY_ID,
-  !!process.env.RAZORPAY_KEY_SECRET
-);
-
-// Initialize Razorpay payment gateway
-razorpayService.initializeRazorpay();
-console.log('Razorpay initialized:', razorpayService.isInitialized());
-
-// Connect to database
-connectDB();
-
-// Setup periodic cleanup of expired blocked bookings
-const bookingController = require('./controllers/booking.controller');
-const availabilityController = require('./controllers/availability.controller');
-
-// Run cleanup every 3 minutes for more responsive cleanup
-setInterval(async () => {
-  try {
-    console.log('🔄 Running periodic cleanup...');
-    await bookingController.cleanupExpiredBlockedBookings();
-    await availabilityController.cleanupExpiredBlockedAvailability();
-  } catch (error) {
-    console.error('Error in periodic cleanup:', error);
-  }
-}, 3 * 60 * 1000); // 3 minutes
-
-// Also run cleanup on startup
-setTimeout(async () => {
-  try {
-    console.log('🚀 Running startup cleanup...');
-    await bookingController.cleanupExpiredBlockedBookings();
-    await availabilityController.cleanupExpiredBlockedAvailability();
-  } catch (error) {
-    console.error('Error in startup cleanup:', error);
-  }
-}, 5000); // Wait 5 seconds after startup
-
-// Security middleware setup
-const helmet = createHelmet();
-const rateLimiters = createRateLimiters();
-
-// Helper function to normalize URLs (remove trailing slashes, ensure protocol)
+// ── CORS ───────────────────────────────────────────────────
 const normalizeOrigin = (url) => {
   if (!url) return null;
-  // Remove trailing slashes
   let normalized = url.trim().replace(/\/+$/, '');
-  // If no protocol, assume https for production
   if (!normalized.match(/^https?:\/\//)) {
     normalized = `https://${normalized}`;
   }
   return normalized;
 };
 
-// CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = [];
 
-    // Add FRONTEND_URL if set (handle comma-separated)
-    if (process.env.FRONTEND_URL) {
-      const urls = process.env.FRONTEND_URL.split(',')
+    if (config.frontendUrl) {
+      const urls = config.frontendUrl.split(',')
         .map(url => normalizeOrigin(url))
-        .filter(url => url);
+        .filter(Boolean);
       allowedOrigins.push(...urls);
     }
 
-    // Add ALLOWED_ORIGINS if set (comma-separated list)
-    if (process.env.ALLOWED_ORIGINS) {
-      const additionalOrigins = process.env.ALLOWED_ORIGINS.split(',')
+    if (config.allowedOrigins.length > 0) {
+      const additional = config.allowedOrigins
         .map(url => normalizeOrigin(url))
-        .filter(url => url);
-      allowedOrigins.push(...additionalOrigins);
+        .filter(Boolean);
+      allowedOrigins.push(...additional);
     }
 
-    // Allow requests with no origin (like mobile apps, Postman, or curl)
-    if (!origin) {
-      return callback(null, true);
-    }
+    // Allow requests with no origin (mobile apps, Postman, curl)
+    if (!origin) return callback(null, true);
 
-    // Normalize the incoming origin
     const normalizedOrigin = normalizeOrigin(origin);
-
-    // Check if origin is in allowed list (case-insensitive comparison)
     const isAllowed = allowedOrigins.some(allowed => {
-      const normalizedAllowed = normalizeOrigin(allowed);
-      return normalizedAllowed && normalizedAllowed.toLowerCase() === normalizedOrigin.toLowerCase();
+      const norm = normalizeOrigin(allowed);
+      return norm && norm.toLowerCase() === normalizedOrigin.toLowerCase();
     });
 
     if (isAllowed) {
       callback(null, true);
     } else {
-      console.log('🚫 CORS blocked origin:', origin);
+      logger.warn('CORS blocked origin', { origin });
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -147,71 +75,61 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
 };
 
-// Apply security middleware
-app.use(helmet);
-
-// CORS middleware - must be before other middleware
-// This already handles all OPTIONS preflight requests automatically
 app.use(cors(corsOptions));
 
+// ── Body parsing ───────────────────────────────────────────
 app.use(express.json({
-  limit: securityConfig.validation.maxRequestSize,
+  limit: config.maxRequestSize,
   verify: (req, res, buf) => {
+    // Preserve raw body for webhook signature verification
     if (req.originalUrl && req.originalUrl.startsWith('/api/payments/webhook/')) {
       req.rawBody = buf.toString('utf8');
     }
   }
 }));
-app.use(express.urlencoded({ extended: true, limit: securityConfig.validation.maxRequestSize }));
+app.use(express.urlencoded({ extended: true, limit: config.maxRequestSize }));
 
-// Global rate limiting
+// ── Rate limiting ──────────────────────────────────────────
+const rateLimiters = createRateLimiters();
 app.use('/api/admin', rateLimiters.adminAPI);
 app.use('/api/auth', rateLimiters.login);
 
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  next();
-});
+// ── Request logging ────────────────────────────────────────
+app.use(requestLogger);
 
-// Root route handler (for health checks from Render, etc.)
+// ── Health & root endpoints ────────────────────────────────
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'TripMe Backend API is running',
     timestamp: new Date().toISOString(),
     version: process.env.npm_package_version || '1.0.0',
-    endpoints: {
-      health: '/api/health',
-      api: '/api'
+    endpoints: { health: '/api/health', api: '/api' }
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  const mem = process.memoryUsage();
+  res.status(200).json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: config.env,
+    version: process.env.npm_package_version || '1.0.0',
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    memory: {
+      used: Math.round(mem.heapUsed / 1024 / 1024) + ' MB',
+      total: Math.round(mem.heapTotal / 1024 / 1024) + ' MB',
+      rss: Math.round(mem.rss / 1024 / 1024) + ' MB'
     }
   });
 });
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  const healthCheck = {
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV,
-    version: process.env.npm_package_version || '1.0.0',
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    memory: {
-      used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
-      total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
-    }
-  };
-
-  res.status(200).json(healthCheck);
-});
-
-// Public API endpoints (no authentication required)
+// ── Public API endpoints ───────────────────────────────────
 app.get('/api/public/platform-fee', async (req, res) => {
   try {
     const PricingConfig = require('./models/PricingConfig');
     const currentRate = await PricingConfig.getCurrentPlatformFeeRate();
-
     res.status(200).json({
       success: true,
       data: {
@@ -221,43 +139,18 @@ app.get('/api/public/platform-fee', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching platform fee rate:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch platform fee rate'
-    });
+    logger.error('Error fetching platform fee rate', { error: error.message });
+    res.status(500).json({ success: false, message: 'Failed to fetch platform fee rate' });
   }
 });
 
-// Test endpoint
-app.get('/api/test', (req, res) => {
-  res.json({ success: true, message: 'Server is working' });
-});
+// ── Swagger / OpenAPI docs ─────────────────────────────────
+const { setupSwagger } = require('./config/swagger');
+setupSwagger(app);
 
-// Debug Razorpay status endpoint
-app.get('/api/debug/razorpay', (req, res) => {
-  const keyId = process.env.RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  
-  res.json({
-    success: true,
-    razorpay: {
-      keyIdPresent: !!keyId,
-      keyIdPrefix: keyId ? keyId.substring(0, 12) + '...' : null,
-      keySecretPresent: !!keySecret,
-      isInitialized: razorpayService.isInitialized(),
-      envKeys: Object.keys(process.env).filter(k => k.includes('RAZORPAY'))
-    },
-    allEnvKeys: Object.keys(process.env).sort()
-  });
-});
-
-// API Routes
-console.log('🔍 Loading auth routes...');
+// ── API Routes ─────────────────────────────────────────────
 app.use('/api/auth', require('./routes/auth.routes'));
-console.log('🔍 Loading admin routes...');
 app.use('/api/admin', require('./routes/admin.routes'));
-console.log('🔍 Admin routes loaded successfully');
 app.use('/api/kyc', require('./routes/kyc.routes'));
 app.use('/api/host', require('./routes/host.routes'));
 app.use('/api/listings', require('./routes/listing.routes'));
@@ -277,33 +170,141 @@ app.use('/api/availability', require('./routes/availability.routes'));
 app.use('/api/pricing', require('./routes/pricing.routes'));
 app.use('/api/email-subscription', require('./routes/emailSubscription.routes'));
 app.use('/api/popular-destinations', require('./routes/popularDestination.routes'));
-// Hourly booking routes moved to main booking routes
 
-// Note: Frontend is deployed separately
-// No need for static file serving or catch-all routes
-
-// Error handling middleware
+// ── Error handling ─────────────────────────────────────────
 const { errorHandler, notFound } = require('./middlewares/error.middleware');
-
-// 404 handler
 app.use(notFound);
-
-// Error handler
 app.use(errorHandler);
 
-// Handle unhandled promise rejections
+// ── Background jobs (store refs for graceful shutdown) ─────
+const _intervals = [];
+const _timeouts = [];
+
+async function startBackgroundJobs() {
+  const bookingController = require('./controllers/booking.controller');
+  const availabilityController = require('./controllers/availability.controller');
+
+  // Cleanup expired blocked bookings every 3 minutes
+  _intervals.push(
+    setInterval(async () => {
+      try {
+        await bookingController.cleanupExpiredBlockedBookings();
+        await availabilityController.cleanupExpiredBlockedAvailability();
+      } catch (error) {
+        logger.error('Error in periodic cleanup', { error: error.message });
+      }
+    }, config.cleanupIntervalMs)
+  );
+
+  // Payment reconciliation every 12 minutes
+  _intervals.push(
+    setInterval(async () => {
+      try {
+        await runReconciliation();
+      } catch (error) {
+        logger.error('Error in reconciliation cron', { error: error.message });
+      }
+    }, config.reconciliationIntervalMs)
+  );
+
+  // Startup cleanup (after DB connects)
+  _timeouts.push(
+    setTimeout(async () => {
+      try {
+        logger.info('Running startup cleanup...');
+        await bookingController.cleanupExpiredBlockedBookings();
+        await availabilityController.cleanupExpiredBlockedAvailability();
+      } catch (error) {
+        logger.error('Error in startup cleanup', { error: error.message });
+      }
+    }, 5000)
+  );
+
+  // Startup reconciliation (after 30s to let DB connect)
+  _timeouts.push(
+    setTimeout(async () => {
+      try {
+        logger.info('Running startup payment reconciliation...');
+        await runReconciliation();
+      } catch (error) {
+        logger.error('Error in startup reconciliation', { error: error.message });
+      }
+    }, 30000)
+  );
+}
+
+// ── Graceful shutdown ──────────────────────────────────────
+let server;
+
+async function gracefulShutdown(signal) {
+  logger.info(`Received ${signal}. Starting graceful shutdown...`);
+
+  // Clear all intervals and timeouts
+  _intervals.forEach(clearInterval);
+  _timeouts.forEach(clearTimeout);
+
+  // Close HTTP server (stop accepting new connections)
+  if (server) {
+    server.close(() => {
+      logger.info('HTTP server closed');
+    });
+  }
+
+  // Close database connection
+  try {
+    await mongoose.connection.close();
+    logger.info('MongoDB connection closed');
+  } catch (err) {
+    logger.error('Error closing MongoDB connection', { error: err.message });
+  }
+
+  // Force exit after 10 seconds
+  setTimeout(() => {
+    logger.error('Could not close connections in time, forcing shutdown');
+    process.exit(1);
+  }, 10000).unref();
+
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// ── Global error handlers ──────────────────────────────────
 process.on('unhandledRejection', (err) => {
-  console.error('❌ Unhandled Promise Rejection:', err);
-  console.error('Stack:', err.stack);
+  logger.error('Unhandled Promise Rejection', { error: err.message, stack: err.stack });
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
-  console.error('❌ Uncaught Exception:', err);
-  console.error('Stack:', err.stack);
+  logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
+  // Uncaught exceptions leave the process in an undefined state — exit
+  gracefulShutdown('uncaughtException');
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`✅ Backend server running on port ${port}`);
-  console.log(`📊 Health check: /api/health`);
-});
+// ── Bootstrap ──────────────────────────────────────────────
+async function startServer() {
+  try {
+    // Connect to database
+    await connectDB();
+
+    // Initialize Razorpay
+    razorpayService.initializeRazorpay();
+    logger.info('Razorpay initialized', { ready: razorpayService.isInitialized() });
+
+    // Start background jobs
+    startBackgroundJobs();
+
+    // Start HTTP server
+    server = app.listen(config.port, '0.0.0.0', () => {
+      logger.info(`TripMe Backend running on port ${config.port}`, {
+        env: config.env,
+        port: config.port,
+      });
+    });
+  } catch (error) {
+    logger.error('Failed to start server', { error: error.message });
+    process.exit(1);
+  }
+}
+
+startServer();

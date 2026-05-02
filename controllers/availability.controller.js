@@ -1,4 +1,6 @@
 const Availability = require('../models/Availability');
+
+const Service = require('../models/Service');
 const Property = require('../models/Property');
 
 // ========================================
@@ -2408,9 +2410,36 @@ const checkTimeSlotAvailability = async (req, res) => {
         // A partially-available slot that survived filteredDailyAvailability means
         // check-in is BEFORE availableAfter — treat it as blocking.
         // (If check-in was after availableAfter, the slot was already removed above.)
+        // if (slot.status === 'partially-available') {
+        //   return true;
+        // }
+
         if (slot.status === 'partially-available') {
-          return true;
+            const slotDateStr = new Date(slot.date).toISOString().split('T')[0];
+            const checkInDateStr = formatLocalDate(checkInDate);
+
+            if (slotDateStr === checkInDateStr) {
+              const match = slot.reason?.match(/after\s+(\d{1,2}):?(\d{0,2})\s*(AM|PM)/i);
+
+      if (match) {
+        let [_, h, m, period] = match;
+        h = parseInt(h);
+        m = m ? parseInt(m) : 0;
+
+        if (period.toUpperCase() === 'PM' && h !== 12) h += 12;
+        if (period.toUpperCase() === 'AM' && h === 12) h = 0;
+
+        const availableAfterMinutes = h * 60 + m;
+        const checkInMinutes = checkInDate.getHours() * 60 + checkInDate.getMinutes();
+
+        if (checkInMinutes >= availableAfterMinutes) {
+          return false; // ✅ allow booking
         }
+      }
+              }
+
+          return true; // ❌ block only if before allowed time
+                }
         
         return false;
       });
@@ -2513,6 +2542,8 @@ const hasConflicts =
 // END NEW: HOURLY AVAILABILITY ENDPOINTS
 // ========================================
 
+
+
 module.exports = {
   // OLD: Existing exports (keep these)
   getPropertyAvailability,
@@ -2535,5 +2566,7 @@ module.exports = {
   getPropertyEvents,
   updateMaintenanceTime,
   getNextAvailableSlot,
-  checkTimeSlotAvailability
+  checkTimeSlotAvailability,
+
+  
 };

@@ -3,6 +3,7 @@ const Property = require('../models/Property');
 const Service = require('../models/Service');
 const User = require('../models/User');
 const Payment = require('../models/Payment');
+const Payout = require('../models/Payout');
 const Coupon = require('../models/Coupon');
 const Availability = require('../models/Availability');
 const razorpayService = require('../services/razorpay.service');
@@ -28,7 +29,6 @@ const {
   sendHostStatusUpdateEmail
 } = require('../utils/sendEmail');
 const { generateReceipt, generateReceiptHTML } = require('../utils/generateReceipt');
-const { PRICING_CONFIG } = require('../config/pricing.config');
 
 // Helper function to map Refund model status to Booking model refundStatus enum
 // Refund model: ['pending', 'approved', 'processing', 'completed', 'failed', 'rejected', 'cancelled']
@@ -255,7 +255,10 @@ const processPaymentAndCreateBooking = async (req, res) => {
       extensionHours,
       bookingDuration,
       // Late check-in flag: use basePrice24Hour per night even for daily multi-night bookings
-      isLateCheckIn
+      isLateCheckIn,
+      // Secure pricing token: pre-validated amount issued by /api/pricing/calculate
+      // If provided and valid, we trust this amount instead of recalculating
+      pricingToken
     } = req.body;
 
     // Generate idempotency key if not provided
@@ -587,7 +590,112 @@ const processPaymentAndCreateBooking = async (req, res) => {
       }
 
       // Calculate final pricing breakdown using unified utilities
-      const pricing = await calculatePricingBreakdown(pricingParams);
+      let pricing = await calculatePricingBreakdown(pricingParams);
+
+      // Cache for Razorpay payment details fetched during service anchor / token recovery
+      let prefetchedRazorpayDetails = null;
+
+      // ── Service Booking: anchor totalAmount to Razorpay-charged amount ─────────
+      // The service booking page computes its own total (basePrice + guests + 12% flat
+      // platform fee) while this backend uses the DB-configured rate (15%) + GST +
+      // processing fee — producing a guaranteed mismatch.  Rather than recreating the
+      // frontend formula, we trust the Razorpay-charged amount as the authoritative
+      // total (the customer already consciously paid that amount).
+      if (bookingType === 'service' && paymentData?.razorpayPaymentId) {
+        try {
+          const razorpayService = require('../services/razorpay.service');
+          const rzpDetails = await razorpayService.getPaymentDetails(paymentData.razorpayPaymentId);
+          const chargedRupees = Number(rzpDetails?.amount) / 100; // paise → rupees
+          if (chargedRupees > 0) {
+            console.log(`💰 Service booking: anchoring totalAmount to Razorpay-charged ₹${chargedRupees} (backend calculated ₹${pricing.totalAmount})`);
+            // Store prefetched details to avoid duplicate API call later
+            prefetchedRazorpayDetails = rzpDetails;
+            pricing = { ...pricing, totalAmount: chargedRupees };
+          }
+        } catch (rzpErr) {
+          console.error('⚠️ Could not fetch Razorpay details for service amount anchor:', rzpErr.message);
+          // Fall through — will likely hit mismatch check below and fail safely
+        }
+      }
+
+
+      // ── Pricing Token Verification ───────────────────────────────────────────
+      // If the client supplied a pricingToken (issued by /api/pricing/calculate),
+      // verify it and trust the pre-validated amount.  This prevents race conditions
+      // where minor parameter differences cause the backend to produce a total that
+      // differs from what Razorpay was charged.
+      if (pricingToken) {
+        const { verifyPricingToken } = require('../middlewares/pricingSecurity.middleware');
+        const checkInDateRaw = checkIn instanceof Date ? checkIn : new Date(checkIn);
+        const checkOutDateRaw = checkOut instanceof Date ? checkOut : new Date(checkOut);
+        const checkInDateOnly = new Date(checkInDateRaw.getFullYear(), checkInDateRaw.getMonth(), checkInDateRaw.getDate());
+        const checkOutDateOnly = new Date(checkOutDateRaw.getFullYear(), checkOutDateRaw.getMonth(), checkOutDateRaw.getDate());
+        const tokenNights = Math.max(0, (checkOutDateOnly - checkInDateOnly) / (1000 * 60 * 60 * 24));
+
+        // Normalize checkIn/checkOut to YYYY-MM-DD — this is the format the pricing
+        // controller uses when generating the token, so we must match it exactly.
+        const toDateOnlyStr = (d) => {
+          const dt = d instanceof Date ? d : new Date(d);
+          return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+        };
+        const checkInStr = toDateOnlyStr(checkInDateRaw);
+        const checkOutStr = toDateOnlyStr(checkOutDateRaw);
+
+        // Base token payload matching what pricing.controller.js generates
+        const baseTokenPayload = {
+          propertyId: String(propertyId || listingId || ''),
+          checkIn: checkInStr,
+          checkOut: checkOutStr,
+          guests,
+          nights: tokenNights,
+        };
+
+        let tokenIsValid = false;
+        let recoveredAmount = null;
+
+        // Step 1: Try verifying against current recalculated total
+        try {
+          tokenIsValid = verifyPricingToken({ ...baseTokenPayload, totalAmount: pricing.totalAmount }, pricingToken);
+        } catch (_e) {
+          tokenIsValid = false;
+        }
+
+        // Step 2: If recalculated amount doesn't match token, try the Razorpay-charged amount.
+        // This is the recovery path for the mismatch bug: the pricing token was generated
+        // with the correct amount (₹X) but the backend just recalculated ₹Y due to parameter
+        // drift.  The actual charged amount from Razorpay is the authoritative correct amount.
+        if (!tokenIsValid && paymentData?.razorpayPaymentId) {
+          try {
+            const rzpDetails = await razorpayService.getPaymentDetails(paymentData.razorpayPaymentId);
+            prefetchedRazorpayDetails = rzpDetails; // cache for reuse below
+            const chargedRupees = Number(rzpDetails?.amount) / 100; // paise → rupees
+            const candidateValid = (() => {
+              try {
+                return verifyPricingToken({ ...baseTokenPayload, totalAmount: chargedRupees }, pricingToken);
+              } catch (_e) {
+                return false;
+              }
+            })();
+            if (candidateValid) {
+              console.log(`✅ pricingToken verified against Razorpay-charged amount ₹${chargedRupees} (backend recalculated ₹${pricing.totalAmount}). Using charged amount.`);
+              recoveredAmount = chargedRupees;
+              pricing = { ...pricing, totalAmount: chargedRupees };
+              tokenIsValid = true;
+            }
+          } catch (rzpLookupErr) {
+            console.error('⚠️ Could not fetch Razorpay payment details for token recovery:', rzpLookupErr.message);
+          }
+        }
+
+        if (tokenIsValid) {
+          console.log(`🔒 pricingToken verified — final booking amount: ₹${pricing.totalAmount}${recoveredAmount ? ' (recovered from Razorpay)' : ' (matches recalculation)'}`);
+        } else {
+          console.warn(`⚠️ pricingToken provided but could not be verified. Proceeding with recalculated total ₹${pricing.totalAmount}. Token check: non-fatal.`);
+        }
+      } else {
+        console.log(`💰 No pricingToken supplied — booking will use recalculated total ₹${pricing.totalAmount}`);
+      }
+      // ─────────────────────────────────────────────────────────────────────────
 
       // Extract values for backward compatibility
       const {
@@ -780,9 +888,9 @@ const processPaymentAndCreateBooking = async (req, res) => {
         razorpayPaymentId = paymentData.razorpayPaymentId;
         razorpaySignature = paymentData.razorpaySignature;
 
-        // Get payment details from Razorpay
+        // Get payment details from Razorpay (use pre-fetched details if available from token recovery)
         try {
-          razorpayPaymentDetails = await razorpayService.getPaymentDetails(razorpayPaymentId);
+          razorpayPaymentDetails = prefetchedRazorpayDetails || await razorpayService.getPaymentDetails(razorpayPaymentId);
         } catch (razorpayError) {
           console.error('❌ Error fetching Razorpay payment details:', razorpayError);
           const err = new Error("Failed to verify payment with Razorpay");
@@ -1214,6 +1322,74 @@ const processPaymentAndCreateBooking = async (req, res) => {
         // ========================================
       }
 
+      // ========================================
+      // Step 4.6: Mark the booked service slot as unavailable
+      // Services store their slots directly in service.availableSlots.
+      // After a successful payment we must flip the matching slot to
+      // isAvailable=false / status='booked' so it disappears from the
+      // booking calendar for other users.
+      // ========================================
+      if (bookingType === 'service' && serviceId && timeSlot) {
+        try {
+          const slotStart = timeSlot.startTime ? new Date(timeSlot.startTime) : null;
+          const slotEnd   = timeSlot.endTime   ? new Date(timeSlot.endTime)   : null;
+
+          if (slotStart && slotEnd) {
+            // Find the service (already loaded above) and update the exact slot
+            const slotUpdateResult = await Service.updateOne(
+              {
+                _id: serviceId,
+                'availableSlots': {
+                  $elemMatch: {
+                    startTime: slotStart,
+                    endTime:   slotEnd,
+                  }
+                }
+              },
+              {
+                $set: {
+                  'availableSlots.$[slot].isAvailable': false,
+                  'availableSlots.$[slot].status': 'booked',
+                }
+              },
+              {
+                arrayFilters: [
+                  {
+                    'slot.startTime': slotStart,
+                    'slot.endTime':   slotEnd,
+                  }
+                ],
+                session,
+              }
+            );
+
+            console.log(`✅ Service slot marked as booked: ${slotStart.toISOString()} – ${slotEnd.toISOString()} | modified: ${slotUpdateResult.modifiedCount}`);
+
+            if (slotUpdateResult.modifiedCount === 0) {
+              // Fallback: match by startTime only (endTime timezone drift tolerance)
+              const fallbackResult = await Service.updateOne(
+                { _id: serviceId },
+                {
+                  $set: {
+                    'availableSlots.$[slot].isAvailable': false,
+                    'availableSlots.$[slot].status': 'booked',
+                  }
+                },
+                {
+                  arrayFilters: [{ 'slot.startTime': slotStart }],
+                  session,
+                }
+              );
+              console.log(`🔄 Fallback slot update: modified ${fallbackResult.modifiedCount}`);
+            }
+          }
+        } catch (slotErr) {
+          console.error('⚠️ Error marking service slot as booked:', slotErr);
+          // Non-fatal — booking has already been created and payment collected.
+        }
+      }
+      // ========================================
+
       // Step 5: Create notification for host
       await Notification.create({
         user: host._id,
@@ -1295,6 +1471,42 @@ const processPaymentAndCreateBooking = async (req, res) => {
         console.error('Email sending failed:', emailError);
         // Don't fail the booking if email fails
       }
+
+      // ========================================
+      // Step 7: Create Payout record for the host
+      // This creates a Payout document in the Payout collection so the
+      // admin can see it in the Host Payouts tab and confirm payment.
+      // ========================================
+      try {
+        const payoutScheduledDate = bookingType === 'property' && checkIn
+          ? new Date(new Date(checkIn).getTime() + 24 * 60 * 60 * 1000) // 24h after check-in for properties
+          : new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now for services
+
+        const hostPayoutAmount = hostEarning || paymentDoc.commission?.hostEarning || 0;
+
+        await Payout.create([{
+          host: host._id,
+          payment: paymentDoc._id,
+          booking: bookingDoc._id,
+          amount: hostPayoutAmount,
+          currency: bookingDoc.currency || 'INR',
+          status: 'pending',
+          method: 'bank_transfer',
+          scheduledDate: payoutScheduledDate,
+          fees: {
+            processingFee: 0,
+            taxDeduction: 0,
+            netAmount: hostPayoutAmount
+          },
+          notes: `Auto-scheduled payout for booking ${bookingDoc.receiptId || bookingDoc._id}`
+        }], { session });
+
+        console.log(`✅ Host payout record created: ₹${hostPayoutAmount} for host ${host._id}`);
+      } catch (payoutErr) {
+        console.error('⚠️ Failed to create payout record (non-fatal):', payoutErr.message);
+        // Non-fatal: booking and payment are already created
+      }
+
       amount = totalAmount;
     });
 

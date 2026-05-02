@@ -60,7 +60,7 @@ const propertySchema = new mongoose.Schema({
   },
   placeType: {
     type: String,
-    enum: ['entire', 'room', 'shared'],
+    enum: ['entire', 'room','private', 'shared'],
     default: 'entire'
   },
   images: [{
@@ -427,8 +427,210 @@ propertySchema.virtual('bookings', {
   localField: '_id',
   foreignField: 'listing'
 });
+// propertySchema.virtual('badges').get(function () {
+//   const badges = [];
+
+//   // ⭐ Rating based
+//   if (this.rating?.average >= 4.5) {
+//     badges.push({ label: "Highly rated" });
+//   }
+
+//   if (this.rating?.checkIn >= 4.7) {
+//     badges.push({ label: "Exceptional check-in"});
+//   }
+
+//   if (this.rating?.location >= 4.7) {
+//     badges.push({ label: "Great location" });
+//   }
+
+//   if (this.reviewCount >= 20) {
+//     badges.push({ label: "Loved by guests" });
+//   }
+
+//   // 🆕 New
+//   const days =
+//     (Date.now() - new Date(this.createdAt)) / (1000 * 60 * 60 * 24);
+
+//   if (days < 15) {
+//     badges.push({ label: "New", icon: "🆕" });
+//   }
+
+//   // 🔥 Optional (if you add stats later)
+//   if (this.stats?.views > 1000) {
+//     badges.push({ label: "Trending" });
+//   }
+
+//   return badges;
+// });
 
 // Pre-save hook to generate slug
+
+
+const HIGHLIGHT_BADGES = [
+  {
+    type: "guest_favorite",
+    label: "Guest favourite",
+    icon: "🏆",
+    priority: 1,
+    condition: (l) => l.rating?.average >= 4.7 && l.reviewCount >= 20
+  },
+  {
+    type: "top_5_percent",
+    label: "Top 5% of homes",
+    icon: "🥇",
+    priority: 2,
+    condition: (l) => l.rankScore >= 95 // optional future
+  },
+  {
+    type: "super_host",
+    label: "Superhost",
+    icon: "⭐",
+    priority: 3,
+    condition: (l) => l.host?.rating >= 4.8 && l.host?.reviewCount > 50
+  },
+  {
+    type: "rare_find",
+    label: "Rare find",
+    icon: "💎",
+    priority: 4,
+    condition: (l) => (l.availabilityMeta?.remainingSlots || 0) <= 1
+  }
+];
+
+const DETAIL_BADGES = [
+  {
+    type: "checkin",
+    label: "Exceptional check-in",
+    icon: "🔑",
+    priority: 1,
+    condition: (l) => l.rating?.checkIn >= 4.7
+  },
+  {
+    type: "cleanliness",
+    label: "Sparkling clean",
+    icon: "🧼",
+    priority: 2,
+    condition: (l) => l.rating?.cleanliness >= 4.7
+  },
+  {
+    type: "location",
+    label: "Great location",
+    icon: "📍",
+    priority: 3,
+    condition: (l) => l.rating?.location >= 4.7
+  },
+  {
+    type: "value",
+    label: "Great value",
+    icon: "💰",
+    priority: 4,
+    condition: (l) => l.rating?.value >= 4.7
+  },
+  {
+    type: "host_exp",
+    label: "Experienced host",
+    icon: "👤",
+    priority: 5,
+    condition: (l) => l.host?.createdAt && (new Date().getFullYear() - new Date(l.host.createdAt).getFullYear()) >= 3
+  }
+];
+
+const INSIGHT_BADGES = [
+  {
+    type: "price_low",
+    label: "Price is lower than average",
+    icon: "🏷️",
+    priority: 1,
+    condition: (l) => l.pricing?.basePrice < (l.avgPrice || 0)
+  },
+  {
+    type: "high_demand",
+    label: "In high demand",
+    icon: "🔥",
+    priority: 2,
+    condition: (l) => (l.stats?.bookingsLast7Days || 0) > 5
+  },
+  {
+    type: "trending",
+    label: "Trending",
+    icon: "📈",
+    priority: 3,
+    condition: (l) => (l.stats?.views || 0) > 1000
+  }
+];
+
+const URGENCY_BADGES = [
+  {
+    type: "only_one_left",
+    label: "Only 1 left",
+    icon: "⚡",
+    priority: 1,
+    condition: (l) => (l.availabilityMeta?.remainingSlots || 0) === 1
+  },
+  {
+    type: "limited_slots",
+    label: "Limited availability",
+    icon: "⏳",
+    priority: 2,
+    condition: (l) => (l.availabilityMeta?.remainingSlots || 0) <= 3
+  }
+];
+
+const pickBadges = (list, listing, limit) => {
+  return list
+    .filter(b => b.condition(listing))
+    .sort((a, b) => a.priority - b.priority)
+    .slice(0, limit)
+    .map(({ condition, ...rest }) => rest);
+};
+
+propertySchema.virtual('badges').get(function () {
+
+   let highlight = pickBadges(HIGHLIGHT_BADGES, this, 1);
+
+  // 🧠 Fallback logic (IMPORTANT)
+  if (highlight.length === 0) {
+    const fallback = [];
+
+    const days =
+      (Date.now() - new Date(this.createdAt)) / (1000 * 60 * 60 * 24);
+
+    // 🆕 New listing
+    if (days < 15) {
+      fallback.push({
+        type: "new_listing",
+        label: "New",
+        icon: "🆕",
+        priority: 99
+      });
+    }
+    // 👤 New host
+    else if (this.host?.createdAt) {
+      const hostAge =
+        (Date.now() - new Date(this.host.createdAt)) /
+        (1000 * 60 * 60 * 24 * 365);
+
+      if (hostAge < 1) {
+        fallback.push({
+          type: "new_host",
+          label: "New host",
+          icon: "👤",
+          priority: 100
+        });
+      }
+    }
+
+    highlight = fallback.slice(0, 1);
+  }
+  return {
+    highlight: pickBadges(HIGHLIGHT_BADGES, this, 1),
+    details: pickBadges(DETAIL_BADGES, this, 4),
+    insights: pickBadges(INSIGHT_BADGES, this, 2),
+    urgency: pickBadges(URGENCY_BADGES, this, 1)
+  };
+});
+
+
 propertySchema.pre('save', function(next) {
   // Generate slug if title is modified or if slug is missing/null
   if (this.isModified('title') || !this.seo?.slug) {

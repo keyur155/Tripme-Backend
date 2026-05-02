@@ -74,7 +74,7 @@ const sendNotificationEmail = async (subscriberEmail, subscriberName, userDetail
 
      await sendEmail(subscriberEmail, 'welcome', {
       userName: subscriberName || subscriberEmail.split('@')[0],
-      link: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email`
+      link: `${(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim()}/verify-email`
     });
 
     // await sendEmail('19bet1030@gmail.com', emailContent);

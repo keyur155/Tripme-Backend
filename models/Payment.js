@@ -37,10 +37,39 @@ const paymentSchema = new mongoose.Schema({
   razorpayOrderId: String,
   razorpayPaymentId: String,
   razorpaySignature: String,
+  // Razorpay order-level status (created, attempted, paid)
+  orderStatus: {
+    type: String,
+    enum: ['created', 'attempted', 'paid', 'unknown'],
+    default: 'created'
+  },
   status: {
     type: String,
-    enum: ['pending', 'processing', 'completed', 'failed', 'refunded', 'partially_refunded', 'cancelled'],
+    enum: ['pending', 'processing', 'authorized', 'completed', 'failed', 'refunded', 'partially_refunded', 'cancelled'],
     default: 'pending'
+  },
+  // Webhook tracking
+  webhookStatus: {
+    type: String,
+    enum: ['not_received', 'authorized', 'captured', 'failed', 'processing'],
+    default: 'not_received'
+  },
+  webhookReceivedAt: Date,
+  // Failure details from Razorpay
+  failureDetails: {
+    error_code: String,
+    error_description: String,
+    error_source: String,
+    error_step: String,
+    error_reason: String,
+    error_metadata: mongoose.Schema.Types.Mixed,
+    timestamp: Date
+  },
+  // Reconciliation tracking
+  reconciledAt: Date,
+  reconciliationAttempts: {
+    type: Number,
+    default: 0
   },
   
   // Fee breakdown
@@ -263,9 +292,9 @@ paymentSchema.pre('save', function(next) {
     if (this.pricingBreakdown?.customerBreakdown?.platformFee && this.subtotal > 0) {
       // Calculate rate from stored breakdown
       platformFeeRate = this.pricingBreakdown.customerBreakdown.platformFee / this.subtotal;
-      console.log(`✅ Using platform fee rate from pricing breakdown: ${(platformFeeRate * 100).toFixed(1)}%`);
+      // Rate derived from pricing breakdown
     } else {
-      console.warn('⚠️ No pricing breakdown found, using fallback platform fee rate: 15%');
+      // No pricing breakdown found, using fallback platform fee rate: 15%
     }
     
     this.commission.platformFee = Math.round(this.subtotal * platformFeeRate * 100) / 100;

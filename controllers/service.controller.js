@@ -41,13 +41,47 @@ const createService = async (req, res) => {
     // Generate slug
     const slug = slugify(title, { lower: true });
 
+    let parsedLocation = location;
+    // Format location properly for MongoDB GeoJSON
+    if (parsedLocation) {
+      if (typeof parsedLocation === 'string') {
+        try { parsedLocation = JSON.parse(parsedLocation); } catch (e) {}
+      }
+      
+      if (parsedLocation.coordinates) {
+        if (typeof parsedLocation.coordinates === 'string') {
+          try { parsedLocation.coordinates = JSON.parse(parsedLocation.coordinates); } catch (e) {}
+        }
+        
+        // Convert [{lat, lng}] or {lat, lng} to [lng, lat] array of numbers
+        if (Array.isArray(parsedLocation.coordinates) && parsedLocation.coordinates.length > 0) {
+          if (typeof parsedLocation.coordinates[0] === 'object' && parsedLocation.coordinates[0] !== null) {
+            const point = parsedLocation.coordinates[0];
+            parsedLocation.coordinates = [
+              Number(point.lng || point.longitude || 0),
+              Number(point.lat || point.latitude || 0)
+            ];
+          } else {
+            // Already numbers but maybe strings '72.1', '23.1'
+            parsedLocation.coordinates = parsedLocation.coordinates.map(Number);
+          }
+        } else if (typeof parsedLocation.coordinates === 'object' && parsedLocation.coordinates !== null) {
+            const point = parsedLocation.coordinates;
+            parsedLocation.coordinates = [
+              Number(point.lng || point.longitude || 0),
+              Number(point.lat || point.latitude || 0)
+            ];
+        }
+      }
+    }
+
     const service = await Service.create({
       title,
       description,
       provider: req.user.id,
       serviceType,
       duration,
-      location,
+      location: parsedLocation,
       groupSize,
       pricing,
       cancellationPolicy,
@@ -258,6 +292,38 @@ const updateService = async (req, res) => {
       };
     }
 
+    // Format location properly for MongoDB GeoJSON
+    if (updateData.location) {
+      if (typeof updateData.location === 'string') {
+        try { updateData.location = JSON.parse(updateData.location); } catch (e) {}
+      }
+      
+      if (updateData.location.coordinates) {
+        if (typeof updateData.location.coordinates === 'string') {
+          try { updateData.location.coordinates = JSON.parse(updateData.location.coordinates); } catch (e) {}
+        }
+        
+        // Convert [{lat, lng}] or {lat, lng} to [lng, lat] array of numbers
+        if (Array.isArray(updateData.location.coordinates) && updateData.location.coordinates.length > 0) {
+          if (typeof updateData.location.coordinates[0] === 'object' && updateData.location.coordinates[0] !== null) {
+            const point = updateData.location.coordinates[0];
+            updateData.location.coordinates = [
+              Number(point.lng || point.longitude || 0),
+              Number(point.lat || point.latitude || 0)
+            ];
+          } else {
+            updateData.location.coordinates = updateData.location.coordinates.map(Number);
+          }
+        } else if (typeof updateData.location.coordinates === 'object' && updateData.location.coordinates !== null) {
+            const point = updateData.location.coordinates;
+            updateData.location.coordinates = [
+              Number(point.lng || point.longitude || 0),
+              Number(point.lat || point.latitude || 0)
+            ];
+        }
+      }
+    }
+
     const updatedService = await Service.findByIdAndUpdate(
       id,
       updateData,
@@ -430,7 +496,7 @@ const getServiceAvailability = async (req, res) => {
   try {
     const { id } = req.params;
     const { startDate, endDate } = req.query;
-
+    console.log(id);
     const service = await Service.findById(id);
     if (!service) {
       return res.status(404).json({

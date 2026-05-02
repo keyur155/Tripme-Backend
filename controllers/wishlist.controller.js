@@ -426,7 +426,7 @@ const shareWishlist = async (req, res) => {
       message: 'Wishlist shared successfully',
       data: {
         shareId: wishlist.shareId,
-        shareUrl: `${process.env.FRONTEND_URL}/wishlist/shared/${wishlist.shareId}`
+        shareUrl: `${(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim()}/wishlist/shared/${wishlist.shareId}`
       }
     });
   } catch (error) {

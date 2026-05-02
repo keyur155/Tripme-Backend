@@ -5,6 +5,7 @@ const Booking = require('../models/Booking');
 const Review = require('../models/Review');
 const Wishlist = require('../models/Wishlist');
 const Notification = require('../models/Notification');
+const Host = require('../models/Host');
 
 // @desc    Get user profile
 // @route   GET /api/users/:id
@@ -122,6 +123,15 @@ const becomeHost = async (req, res) => {
     }
     
     await user.save();
+
+    let host = await Host.findOne({ user: user._id });
+
+    if (!host) {
+      host = await Host.create({
+        user: user._id,
+        hostingSince: new Date(),
+      });
+    }
 
     // Create notification for user
     await Notification.create({

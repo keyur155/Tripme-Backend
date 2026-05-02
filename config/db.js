@@ -1,49 +1,38 @@
 const mongoose = require('mongoose');
-require('dotenv').config();
+const { logger } = require('./logger');
 
 const connectDB = async () => {
   try {
-    // Check if MONGO_URI is defined
-    if (!process.env.MONGO_URI) {
+    const mongoURI = process.env.MONGO_URI;
+    if (!mongoURI) {
       throw new Error('MONGO_URI is not defined in environment variables');
     }
 
-    const mongoURI = process.env.MONGO_URI;
-    console.log('Attempting to connect to MongoDB...');
-    console.log('Database URI:', mongoURI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')); // Hide credentials in logs
-
-    await mongoose.connect(mongoURI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
+    logger.info('Attempting to connect to MongoDB...', {
+      uri: mongoURI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'),
     });
 
-    console.log('✅ MongoDB connected successfully');
-    
-    // Handle connection events
+    await mongoose.connect(mongoURI);
+
+    logger.info('MongoDB connected successfully');
+
     mongoose.connection.on('error', (err) => {
-      console.error('❌ MongoDB connection error:', err);
+      logger.error('MongoDB connection error', { error: err.message });
     });
 
     mongoose.connection.on('disconnected', () => {
-      console.log('⚠️ MongoDB disconnected');
+      logger.warn('MongoDB disconnected');
     });
 
     mongoose.connection.on('reconnected', () => {
-      console.log('🔄 MongoDB reconnected');
+      logger.info('MongoDB reconnected');
     });
 
-    // Graceful shutdown
-    process.on('SIGINT', async () => {
-      await mongoose.connection.close();
-      console.log('MongoDB connection closed through app termination');
-      process.exit(0);
-    });
-
+    // NOTE: SIGINT/SIGTERM handled in server.js gracefulShutdown()
   } catch (error) {
-    console.error('❌ MongoDB connection error:', error.message);
-    console.error('Full error:', error);
-    process.exit(1); // Exit the process with failure
+    logger.error('MongoDB connection failed', { error: error.message });
+    process.exit(1);
   }
-}
+};
 
 module.exports = connectDB;

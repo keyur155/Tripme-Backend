@@ -23,7 +23,8 @@ const getPlatformFeeRate = async (req, res) => {
       success: true,
       data: {
         rate: pricingConfig.platformFeeRate,
-        ratePercentage: `${(pricingConfig.platformFeeRate * 100).toFixed(1)}%`
+        ratePercentage: `${(pricingConfig.platformFeeRate * 100).toFixed(1)}%`,
+        gstRate: pricingConfig.gstRate || 0.18
       }
     });
   } catch (error) {
@@ -51,8 +52,18 @@ const calculatePricing = async (req, res) => {
       bookingType = 'daily',
       checkInDateTime,
       extensionHours = 0,
-      isLateCheckIn = false  // When true, apply basePrice24Hour rate per night for multi-night bookings
+      checkInTime,         // HH:mm string e.g. "16:00" — used to compute isLateCheckIn server-side
+      isLateCheckIn: isLateCheckInFromClient = false  // Client hint; we verify with checkInTime too
     } = req.body;
+
+    // Compute isLateCheckIn server-side from checkInTime when provided (>= 16:00 = 4 PM)
+    // This prevents the frontend needing to know about property config in advance.
+    let isLateCheckIn = isLateCheckInFromClient;
+    if (checkInTime && !isLateCheckIn) {
+      const [h, m] = checkInTime.split(':').map(Number);
+      const totalMinutes = (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+      isLateCheckIn = totalMinutes >= 16 * 60; // >= 4:00 PM
+    }
 
     // Validate required fields and basic correctness (from secure flow)
     const errors = [];
@@ -136,15 +147,22 @@ const calculatePricing = async (req, res) => {
     const totalHours = is24HourBooking ? (24 + (extensionHours || 0)) : undefined;
 
     // Determine base price
-    // - 24-hour booking → always use basePrice24Hour
-    // - Late check-in (after 4 PM) for any duration → use basePrice24Hour per night
+    // - 24-hour booking → use basePrice24Hour if configured (> 0), else regular basePrice
+    // - Late check-in (after 4 PM) for multi-night → same logic
     // - Regular daily → use standard basePrice
+    //
+    // IMPORTANT: basePrice24Hour defaults to 0 in the DB schema (falsy!).
+    // We must check > 0 (not just truthy) to know if the host has configured a 24hr price.
+    // Also honour enable24HourBooking flag: if that flag is true, always use 24hr flow.
+    const has24HourPrice = property.pricing?.basePrice24Hour > 0;
+    const use24HourFlow = property.enable24HourBooking || has24HourPrice;
+
     let basePrice;
-    if (is24HourBooking && property.pricing?.basePrice24Hour) {
-      basePrice = property.pricing.basePrice24Hour;
-    } else if (!is24HourBooking && isLateCheckIn && property.pricing?.basePrice24Hour) {
-      // Multi-night (or same-night) booking with late check-in: use 24-hour price per night
-      basePrice = property.pricing.basePrice24Hour;
+    if ((is24HourBooking || isLateCheckIn) && use24HourFlow) {
+      // Use basePrice24Hour when explicitly set, otherwise fall back to regular basePrice
+      basePrice = has24HourPrice
+        ? property.pricing.basePrice24Hour
+        : property.pricing?.basePrice || 0;
     } else {
       basePrice = property.pricing?.basePrice || 0;
     }
