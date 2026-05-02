@@ -3,6 +3,7 @@ const Property = require('../models/Property');
 const Service = require('../models/Service');
 const User = require('../models/User');
 const Payment = require('../models/Payment');
+const Payout = require('../models/Payout');
 const Coupon = require('../models/Coupon');
 const Availability = require('../models/Availability');
 const razorpayService = require('../services/razorpay.service');
@@ -1322,6 +1323,74 @@ const processPaymentAndCreateBooking = async (req, res) => {
         // ========================================
       }
 
+      // ========================================
+      // Step 4.6: Mark the booked service slot as unavailable
+      // Services store their slots directly in service.availableSlots.
+      // After a successful payment we must flip the matching slot to
+      // isAvailable=false / status='booked' so it disappears from the
+      // booking calendar for other users.
+      // ========================================
+      if (bookingType === 'service' && serviceId && timeSlot) {
+        try {
+          const slotStart = timeSlot.startTime ? new Date(timeSlot.startTime) : null;
+          const slotEnd   = timeSlot.endTime   ? new Date(timeSlot.endTime)   : null;
+
+          if (slotStart && slotEnd) {
+            // Find the service (already loaded above) and update the exact slot
+            const slotUpdateResult = await Service.updateOne(
+              {
+                _id: serviceId,
+                'availableSlots': {
+                  $elemMatch: {
+                    startTime: slotStart,
+                    endTime:   slotEnd,
+                  }
+                }
+              },
+              {
+                $set: {
+                  'availableSlots.$[slot].isAvailable': false,
+                  'availableSlots.$[slot].status': 'booked',
+                }
+              },
+              {
+                arrayFilters: [
+                  {
+                    'slot.startTime': slotStart,
+                    'slot.endTime':   slotEnd,
+                  }
+                ],
+                session,
+              }
+            );
+
+            console.log(`✅ Service slot marked as booked: ${slotStart.toISOString()} – ${slotEnd.toISOString()} | modified: ${slotUpdateResult.modifiedCount}`);
+
+            if (slotUpdateResult.modifiedCount === 0) {
+              // Fallback: match by startTime only (endTime timezone drift tolerance)
+              const fallbackResult = await Service.updateOne(
+                { _id: serviceId },
+                {
+                  $set: {
+                    'availableSlots.$[slot].isAvailable': false,
+                    'availableSlots.$[slot].status': 'booked',
+                  }
+                },
+                {
+                  arrayFilters: [{ 'slot.startTime': slotStart }],
+                  session,
+                }
+              );
+              console.log(`🔄 Fallback slot update: modified ${fallbackResult.modifiedCount}`);
+            }
+          }
+        } catch (slotErr) {
+          console.error('⚠️ Error marking service slot as booked:', slotErr);
+          // Non-fatal — booking has already been created and payment collected.
+        }
+      }
+      // ========================================
+
       // Step 5: Create notification for host
       await Notification.create({
         user: host._id,
@@ -1403,6 +1472,42 @@ const processPaymentAndCreateBooking = async (req, res) => {
         console.error('Email sending failed:', emailError);
         // Don't fail the booking if email fails
       }
+
+      // ========================================
+      // Step 7: Create Payout record for the host
+      // This creates a Payout document in the Payout collection so the
+      // admin can see it in the Host Payouts tab and confirm payment.
+      // ========================================
+      try {
+        const payoutScheduledDate = bookingType === 'property' && checkIn
+          ? new Date(new Date(checkIn).getTime() + 24 * 60 * 60 * 1000) // 24h after check-in for properties
+          : new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now for services
+
+        const hostPayoutAmount = hostEarning || paymentDoc.commission?.hostEarning || 0;
+
+        await Payout.create([{
+          host: host._id,
+          payment: paymentDoc._id,
+          booking: bookingDoc._id,
+          amount: hostPayoutAmount,
+          currency: bookingDoc.currency || 'INR',
+          status: 'pending',
+          method: 'bank_transfer',
+          scheduledDate: payoutScheduledDate,
+          fees: {
+            processingFee: 0,
+            taxDeduction: 0,
+            netAmount: hostPayoutAmount
+          },
+          notes: `Auto-scheduled payout for booking ${bookingDoc.receiptId || bookingDoc._id}`
+        }], { session });
+
+        console.log(`✅ Host payout record created: ₹${hostPayoutAmount} for host ${host._id}`);
+      } catch (payoutErr) {
+        console.error('⚠️ Failed to create payout record (non-fatal):', payoutErr.message);
+        // Non-fatal: booking and payment are already created
+      }
+
       amount = totalAmount;
     });
 

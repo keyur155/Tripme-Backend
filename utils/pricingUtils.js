@@ -25,8 +25,8 @@ async function getCurrentPlatformFeeRate() {
     return rate;
   } catch (error) {
     console.error('❌ Error fetching platform fee rate:', error);
-    console.warn('⚠️ Using fallback platform fee rate: 15%');
-    return 0.15; // Fallback with warning
+    console.warn('⚠️ Using fallback platform fee rate: 3%');
+    return 0.03; // Fallback with warning
   }
 }
 

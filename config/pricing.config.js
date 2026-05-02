@@ -8,7 +8,7 @@ const { toTwoDecimals, getCurrentPlatformFeeRate, calculatePricingBreakdown, cal
 
 const PRICING_CONFIG = {
   // Platform fees (percentage of subtotal) - NOW DYNAMIC
-  PLATFORM_FEE_RATE: 0.15, // 15% TripMe service fee (fallback value)
+  PLATFORM_FEE_RATE: 0.03, // 
   PROCESSING_FEE_RATE: 0.029, // 2.9% processing fee
   PROCESSING_FEE_FIXED: 30, // ₹30 fixed processing fee
   

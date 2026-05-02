@@ -23,7 +23,8 @@ const getPlatformFeeRate = async (req, res) => {
       success: true,
       data: {
         rate: pricingConfig.platformFeeRate,
-        ratePercentage: `${(pricingConfig.platformFeeRate * 100).toFixed(1)}%`
+        ratePercentage: `${(pricingConfig.platformFeeRate * 100).toFixed(1)}%`,
+        gstRate: pricingConfig.gstRate || 0.18
       }
     });
   } catch (error) {

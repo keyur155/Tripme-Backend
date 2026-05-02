@@ -72,7 +72,7 @@ const serviceSchema = new mongoose.Schema({
     isAvailable: { type: Boolean, default: true },
     status: {
       type: String,
-      enum: ['available', 'unavailable', 'on-hold'],
+      enum: ['available', 'unavailable', 'on-hold', 'booked'],
       default: 'available'
     }
   }],

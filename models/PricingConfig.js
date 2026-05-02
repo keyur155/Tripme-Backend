@@ -7,7 +7,7 @@ const pricingConfigSchema = new mongoose.Schema({
     required: true,
     min: 0,
     max: 1, // 0-100% (0.15 = 15%)
-    default: 0.15
+    default: 0.03
   },
   // GST applied on subtotal (0-1)
   gstRate: {
@@ -93,8 +93,8 @@ pricingConfigSchema.statics.getCurrentPlatformFeeRate = async function() {
   
   if (!activeConfig) {
     // Fallback to default rate if no active config found
-    console.warn('⚠️ No active pricing config found, using default platform fee rate: 15%');
-    return 0.15;
+    console.warn('⚠️ No active pricing config found, using default platform fee rate: 3%');
+    return 0.03;
   }
   
   return activeConfig.platformFeeRate;
@@ -113,9 +113,8 @@ pricingConfigSchema.statics.getCurrentPricingConfig = async function() {
   }).sort({ effectiveFrom: -1 });
 
   if (!activeConfig) {
-    console.warn('⚠️ No active pricing config found, using defaults (15%, 18% GST, 2.9% + ₹30 processing).');
     return {
-      platformFeeRate: 0.15,
+      platformFeeRate: 0.03,
       gstRate: 0.18,
       processingFeeRate: 0.029,
       processingFeeFixed: 30
