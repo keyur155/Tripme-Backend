@@ -28,11 +28,7 @@ jobs:
             npm ci --omit=dev
 
             echo "--- Restarting server ---"
-            if pm2 list | grep -q "tripme-backend"; then
-              pm2 reload tripme-backend --update-env
-            else
-              pm2 start server.js --name tripme-backend --node-args="--env-file .env.production"
-            fi
+            pm2 reload backend --update-env
             pm2 save
 
             echo "--- Deploy complete ---"
