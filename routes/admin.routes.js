@@ -48,6 +48,14 @@ router.put('/listings/:listingId/reject', adminController.rejectListing);
 router.patch('/properties/:id/featured', adminController.toggleFeatured);
 router.patch('/properties/:id/sponsored', adminController.toggleSponsored);
 
+// Badge management routes
+router.get('/badges/available', adminController.getAvailableBadges);
+router.get('/properties/:propertyId/badges', adminController.getPropertyBadges);
+router.put('/properties/:propertyId/badges', adminController.updatePropertyBadges);
+router.post('/properties/:propertyId/badges', adminController.addPropertyBadge);
+router.delete('/properties/:propertyId/badges', adminController.removePropertyBadge);
+router.patch('/properties/:propertyId/badges/toggle', adminController.toggleAdminBadges);
+
 // Booking management routes
 router.get('/bookings', adminController.getBookings);
 router.post('/bookings/:bookingId/refund', adminController.refundBooking);

@@ -396,6 +396,34 @@ const propertySchema = new mongoose.Schema({
   reviewCount: {
     type: Number,
     default: 0
+  },
+  // Admin-assigned badges (override dynamic badges)
+  adminBadges: {
+    highlight: [{
+      type: { type: String },
+      label: { type: String },
+      priority: { type: Number, default: 1 }
+    }],
+    details: [{
+      type: { type: String },
+      label: { type: String },
+      priority: { type: Number, default: 1 }
+    }],
+    insights: [{
+      type: { type: String },
+      label: { type: String },
+      priority: { type: Number, default: 1 }
+    }],
+    urgency: [{
+      type: { type: String },
+      label: { type: String },
+      priority: { type: Number, default: 1 }
+    }]
+  },
+  // Flag to use admin badges instead of dynamic ones
+  useAdminBadges: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true,
@@ -585,51 +613,31 @@ const pickBadges = (list, listing, limit) => {
 };
 
 propertySchema.virtual('badges').get(function () {
-
-   let highlight = pickBadges(HIGHLIGHT_BADGES, this, 1);
-
-  // 🧠 Fallback logic (IMPORTANT)
-  if (highlight.length === 0) {
-    const fallback = [];
-
-    const days =
-      (Date.now() - new Date(this.createdAt)) / (1000 * 60 * 60 * 24);
-
-    // 🆕 New listing
-    if (days < 15) {
-      fallback.push({
-        type: "new_listing",
-        label: "New",
-        icon: "🆕",
-        priority: 99
-      });
-    }
-    // 👤 New host
-    else if (this.host?.createdAt) {
-      const hostAge =
-        (Date.now() - new Date(this.host.createdAt)) /
-        (1000 * 60 * 60 * 24 * 365);
-
-      if (hostAge < 1) {
-        fallback.push({
-          type: "new_host",
-          label: "New host",
-          icon: "👤",
-          priority: 100
-        });
-      }
-    }
-
-    highlight = fallback.slice(0, 1);
+  // Admin-only badge system: Only return badges if admin has assigned them
+  // No dynamic badges by default - badges must be explicitly assigned via admin panel
+  if (this.adminBadges) {
+    const adminHighlight = this.adminBadges.highlight || [];
+    const adminDetails = this.adminBadges.details || [];
+    const adminInsights = this.adminBadges.insights || [];
+    const adminUrgency = this.adminBadges.urgency || [];
+    
+    // Return admin badges (frontend handles icons based on badge type)
+    return {
+      highlight: adminHighlight.map(b => ({ type: b.type, label: b.label, priority: b.priority })),
+      details: adminDetails.map(b => ({ type: b.type, label: b.label, priority: b.priority })),
+      insights: adminInsights.map(b => ({ type: b.type, label: b.label, priority: b.priority })),
+      urgency: adminUrgency.map(b => ({ type: b.type, label: b.label, priority: b.priority }))
+    };
   }
+
+  // Return empty badges if no admin badges assigned
   return {
-    highlight: pickBadges(HIGHLIGHT_BADGES, this, 1),
-    details: pickBadges(DETAIL_BADGES, this, 4),
-    insights: pickBadges(INSIGHT_BADGES, this, 2),
-    urgency: pickBadges(URGENCY_BADGES, this, 1)
+    highlight: [],
+    details: [],
+    insights: [],
+    urgency: []
   };
 });
-
 
 propertySchema.pre('save', function(next) {
   // Generate slug if title is modified or if slug is missing/null

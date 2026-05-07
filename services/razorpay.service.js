@@ -6,7 +6,64 @@
 let razorpayInstance = null;
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
+const https = require('https');
 const { logger } = require('../config/logger');
+
+// Direct HTTP call to Razorpay API (bypasses SDK issues)
+async function razorpayHttpRequest(endpoint, method, data) {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  
+  const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+  const postData = JSON.stringify(data);
+  
+  const options = {
+    hostname: 'api.razorpay.com',
+    port: 443,
+    path: `/v1${endpoint}`,
+    method: method,
+    headers: {
+      'Authorization': `Basic ${auth}`,
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(postData)
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let responseData = '';
+      
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+      
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(responseData);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(parsed);
+          } else {
+            const error = new Error(parsed.error?.description || 'Razorpay API error');
+            error.statusCode = res.statusCode;
+            error.error = parsed.error;
+            reject(error);
+          }
+        } catch (e) {
+          reject(new Error(`Invalid JSON response from Razorpay: ${responseData.substring(0, 200)}`));
+        }
+      });
+    });
+
+    req.on('error', (e) => {
+      logger.error('Razorpay HTTP request error', { error: e.message });
+      reject(new Error(`Network error connecting to Razorpay: ${e.message}`));
+    });
+
+    req.write(postData);
+    req.end();
+  });
+}
+
 function initializeRazorpay() {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -44,14 +101,20 @@ function isInitialized() {
 }
 
 async function createOrder(amount, currency = 'INR', receipt, meta = {}) {
-  if (!isInitialized()) {
-    initializeRazorpay();
-    if (!isInitialized()) {
-      throw new Error('Razorpay not initialized: Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET');
-    }
+  // process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  
+  if (!keyId || !keySecret) {
+    throw new Error('Razorpay not initialized: Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET');
   }
 
   const amountPaise = Math.round(Number(amount) * 100);
+
+  // Razorpay requires minimum amount of 100 paise (₹1)
+  if (amountPaise < 100) {
+    throw new Error(`Amount too low: ${amountPaise} paise. Minimum is 100 paise (₹1)`);
+  }
 
   const orderParams = {
     amount: amountPaise,
@@ -61,16 +124,45 @@ async function createOrder(amount, currency = 'INR', receipt, meta = {}) {
     notes: meta,
   };
 
-  const order = await razorpayInstance.orders.create(orderParams);
+  try {
+    logger.info('Razorpay createOrder params', { orderParams });
+    
+    // Use direct HTTP request to bypass SDK normalizeError bug
+    const order = await razorpayHttpRequest('/orders', 'POST', orderParams);
+    
+    if (!order || !order.id) {
+      logger.error('Razorpay returned invalid order response', { order });
+      throw new Error('Invalid response from Razorpay: No order ID returned');
+    }
 
-  return {
-    orderId: order.id,
-    amount: order.amount,
-    currency: order.currency,
-    receipt: order.receipt,
-    status: order.status,
-    rawOrder: order,
-  };
+    return {
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      receipt: order.receipt,
+      status: order.status,
+      rawOrder: order,
+    };
+  } catch (error) {
+    // Log the full error for debugging
+    logger.error('Razorpay createOrder failed', { 
+      error: error.message,
+      errorCode: error.error?.code,
+      errorDescription: error.error?.description,
+      errorReason: error.error?.reason,
+      statusCode: error.statusCode
+    });
+    
+    // Re-throw with more context
+    if (error.error && error.error.description) {
+      const razorpayError = new Error(error.error.description);
+      razorpayError.error = error.error;
+      razorpayError.statusCode = error.statusCode;
+      throw razorpayError;
+    }
+    
+    throw error;
+  }
 }
 
 async function fetchPaymentStatus(paymentId) {

@@ -1141,7 +1141,12 @@ const createRazorpayOrder = async (req, res) => {
       }
     });
   } catch (error) {
-    logger.error('Error creating Razorpay order', { error: error.message });
+    logger.error('Error creating Razorpay order', { 
+      error: error.message,
+      stack: error.stack,
+      errorObj: error.error,
+      statusCode: error.statusCode
+    });
 
     if (error.message && error.message.includes('Razorpay not initialized')) {
       return res.status(500).json({
@@ -1151,11 +1156,21 @@ const createRazorpayOrder = async (req, res) => {
       });
     }
 
-    if (error.error) {
-      return res.status(400).json({
+    // Handle Razorpay API errors
+    if (error.error && typeof error.error === 'object') {
+      return res.status(error.statusCode || 400).json({
         success: false,
         message: error.error.description || 'Failed to create payment order',
-        error: error.error.reason || error.message
+        error: error.error.reason || error.error.code || error.message
+      });
+    }
+
+    // Handle amount validation errors
+    if (error.message && error.message.includes('Amount too low')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        error: 'INVALID_AMOUNT'
       });
     }
 

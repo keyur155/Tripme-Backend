@@ -206,3 +206,5 @@ rabbitmq/
 # Temporary files
 *.tmp
 *.temp
+#  removed test 
+tests/

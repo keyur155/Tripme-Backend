@@ -578,19 +578,7 @@ const getListing = async (req, res) => {
       responseData = listingObj;
     } else {
       responseData = transformListingForFrontend(listing);
-     responseData.badges = {
-  highlight: [{ label: "Guest favourite", icon: "🌿" }],
-  details: [
-    { label: "Exceptional check-in", icon: "🔑" },
-    { label: "Great location", icon: "📍" }
-  ],
-  insights: [
-    { label: "Price is lower than average", icon: "🏷️" }
-  ],
-  urgency: [
-    { label: "Only 1 left", icon: "⚡" }
-  ]
-};
+      // Badges are now handled via the Property model virtual (dynamic or admin-assigned)
     }
     
 

@@ -2343,6 +2343,352 @@ const adminSignup = async (req, res) => {
   }
 };
 
+// Badge Management - Available badge types for reference (icons handled by frontend)
+const AVAILABLE_BADGES = {
+  highlight: [
+    { type: "guest_favorite", label: "Guest favourite" },
+    { type: "top_5_percent", label: "Top 5% of homes" },
+    { type: "super_host", label: "Superhost" },
+    { type: "rare_find", label: "Rare find" },
+    { type: "new_listing", label: "New" },
+    { type: "new_host", label: "New host" }
+  ],
+  details: [
+    { type: "checkin", label: "Exceptional check-in" },
+    { type: "cleanliness", label: "Sparkling clean" },
+    { type: "location", label: "Great location" },
+    { type: "value", label: "Great value" },
+    { type: "host_exp", label: "Experienced host" }
+  ],
+  insights: [
+    { type: "price_low", label: "Price is lower than average" },
+    { type: "high_demand", label: "In high demand" },
+    { type: "trending", label: "Trending" }
+  ],
+  urgency: [
+    { type: "only_one_left", label: "Only 1 left" },
+    { type: "limited_slots", label: "Limited availability" }
+  ]
+};
+
+// Get available badge types
+const getAvailableBadges = async (req, res) => {
+  try {
+    res.status(200).json({
+      success: true,
+      data: AVAILABLE_BADGES
+    });
+  } catch (error) {
+    console.error('❌ Error fetching available badges:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch available badges',
+      error: error.message
+    });
+  }
+};
+
+// Get property badges (both admin and dynamic)
+const getPropertyBadges = async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        propertyId: property._id,
+        title: property.title,
+        useAdminBadges: property.useAdminBadges || false,
+        adminBadges: property.adminBadges || { highlight: [], details: [], insights: [], urgency: [] },
+        dynamicBadges: property.badges // This will return dynamic badges if useAdminBadges is false
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching property badges:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch property badges',
+      error: error.message
+    });
+  }
+};
+
+// Update property badges (admin-assigned)
+const updatePropertyBadges = async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+    const { badges, useAdminBadges } = req.body;
+
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+
+    // Validate badge structure
+    if (badges) {
+      const validCategories = ['highlight', 'details', 'insights', 'urgency'];
+      for (const category of validCategories) {
+        if (badges[category] && !Array.isArray(badges[category])) {
+          return res.status(400).json({
+            success: false,
+            message: `Invalid badge format: ${category} must be an array`
+          });
+        }
+      }
+    }
+
+    // Update admin badges
+    if (badges) {
+      property.adminBadges = {
+        highlight: badges.highlight || [],
+        details: badges.details || [],
+        insights: badges.insights || [],
+        urgency: badges.urgency || []
+      };
+    }
+
+    // Update useAdminBadges flag
+    if (typeof useAdminBadges === 'boolean') {
+      property.useAdminBadges = useAdminBadges;
+    }
+
+    await property.save();
+
+    console.log(`✅ Property ${property.title} badges updated by admin ${req.user?.email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Property badges updated successfully',
+      data: {
+        propertyId: property._id,
+        title: property.title,
+        useAdminBadges: property.useAdminBadges,
+        adminBadges: property.adminBadges,
+        currentBadges: property.badges // Will reflect admin badges if useAdminBadges is true
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error updating property badges:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update property badges',
+      error: error.message
+    });
+  }
+};
+
+// Add a single badge to a property
+const addPropertyBadge = async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+    const { category, badge } = req.body;
+
+    if (!category || !badge) {
+      return res.status(400).json({
+        success: false,
+        message: 'Category and badge are required'
+      });
+    }
+
+    const validCategories = ['highlight', 'details', 'insights', 'urgency'];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid category. Must be one of: ${validCategories.join(', ')}`
+      });
+    }
+
+    if (!badge.type || !badge.label) {
+      return res.status(400).json({
+        success: false,
+        message: 'Badge must have type and label'
+      });
+    }
+
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+
+    // Initialize adminBadges if not exists
+    if (!property.adminBadges) {
+      property.adminBadges = { highlight: [], details: [], insights: [], urgency: [] };
+    }
+
+    // Check if badge already exists
+    const existingBadge = property.adminBadges[category].find(b => b.type === badge.type);
+    if (existingBadge) {
+      return res.status(400).json({
+        success: false,
+        message: 'Badge already exists in this category'
+      });
+    }
+
+    // Add badge (no icon - frontend handles icons based on badge type)
+    property.adminBadges[category].push({
+      type: badge.type,
+      label: badge.label,
+      priority: badge.priority || property.adminBadges[category].length + 1
+    });
+
+    // Enable admin badges
+    property.useAdminBadges = true;
+
+    await property.save();
+
+    console.log(`✅ Badge "${badge.label}" added to property ${property.title} by admin ${req.user?.email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Badge added successfully',
+      data: {
+        propertyId: property._id,
+        title: property.title,
+        adminBadges: property.adminBadges,
+        useAdminBadges: property.useAdminBadges
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error adding property badge:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add property badge',
+      error: error.message
+    });
+  }
+};
+
+// Remove a badge from a property
+const removePropertyBadge = async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+    const { category, badgeType } = req.body;
+
+    if (!category || !badgeType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Category and badgeType are required'
+      });
+    }
+
+    const validCategories = ['highlight', 'details', 'insights', 'urgency'];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid category. Must be one of: ${validCategories.join(', ')}`
+      });
+    }
+
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+
+    if (!property.adminBadges || !property.adminBadges[category]) {
+      return res.status(400).json({
+        success: false,
+        message: 'No badges found in this category'
+      });
+    }
+
+    // Remove badge
+    const initialLength = property.adminBadges[category].length;
+    property.adminBadges[category] = property.adminBadges[category].filter(b => b.type !== badgeType);
+
+    if (property.adminBadges[category].length === initialLength) {
+      return res.status(404).json({
+        success: false,
+        message: 'Badge not found in this category'
+      });
+    }
+
+    // Check if all admin badges are empty, then disable useAdminBadges
+    const allEmpty = ['highlight', 'details', 'insights', 'urgency'].every(
+      cat => !property.adminBadges[cat] || property.adminBadges[cat].length === 0
+    );
+    if (allEmpty) {
+      property.useAdminBadges = false;
+    }
+
+    await property.save();
+
+    console.log(`✅ Badge "${badgeType}" removed from property ${property.title} by admin ${req.user?.email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Badge removed successfully',
+      data: {
+        propertyId: property._id,
+        title: property.title,
+        adminBadges: property.adminBadges,
+        useAdminBadges: property.useAdminBadges
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error removing property badge:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to remove property badge',
+      error: error.message
+    });
+  }
+};
+
+// Toggle admin badges on/off for a property
+const toggleAdminBadges = async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+
+    property.useAdminBadges = !property.useAdminBadges;
+    await property.save();
+
+    console.log(`✅ Property ${property.title} admin badges ${property.useAdminBadges ? 'enabled' : 'disabled'} by admin ${req.user?.email}`);
+
+    res.status(200).json({
+      success: true,
+      message: `Admin badges ${property.useAdminBadges ? 'enabled' : 'disabled'} for property`,
+      data: {
+        propertyId: property._id,
+        title: property.title,
+        useAdminBadges: property.useAdminBadges,
+        currentBadges: property.badges
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error toggling admin badges:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to toggle admin badges',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   // Authentication
   adminSignup,
@@ -2409,5 +2755,13 @@ module.exports = {
 
   // Featured & Sponsored
   toggleFeatured,
-  toggleSponsored
+  toggleSponsored,
+
+  // Badge Management
+  getAvailableBadges,
+  getPropertyBadges,
+  updatePropertyBadges,
+  addPropertyBadge,
+  removePropertyBadge,
+  toggleAdminBadges
 }; 
