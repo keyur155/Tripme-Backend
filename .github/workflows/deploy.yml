@@ -4,12 +4,13 @@ on:
   push:
     branches:
       - main
+      - beta
 
 jobs:
-  deploy:
-    name: Deploy to Digital Ocean Droplet
+  deploy-production:
+    name: Deploy Production
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
@@ -19,16 +20,39 @@ jobs:
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
             set -e
-
             echo "--- Pulling latest code ---"
             cd /var/www/tripme/Tripme-Backend
             git pull origin main
-
             echo "--- Installing dependencies ---"
             npm ci --omit=dev
-
             echo "--- Restarting server ---"
             pm2 reload backend --update-env
             pm2 save
+            echo "--- Production deploy complete ---"
 
-            echo "--- Deploy complete ---"
+  deploy-beta:
+    name: Deploy Beta
+    if: github.ref == 'refs/heads/beta'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+            echo "--- Pulling latest beta code ---"
+            cd /var/www/tripme/Tripme-Backend-Beta
+            git pull origin beta
+            echo "--- Installing dependencies ---"
+            npm install --omit=dev
+            echo "--- Restarting beta server ---"
+            if pm2 list | grep -q "backend-beta"; then
+              pm2 reload backend-beta --update-env
+            else
+              PORT=5001 NODE_ENV=production pm2 start server.js --name backend-beta
+            fi
+            pm2 save
+            echo "--- Beta deploy complete ---"
