@@ -29,7 +29,7 @@ const userSchema = new mongoose.Schema({
   password: {
     type: String,
     required: [true, 'Please enter a password'],
-    minlength: [12, 'Password must be at least 12 characters'],
+    minlength: [8, 'Password must be at least 8 characters'],
     validate: {
       validator: function(password) {
         // Require: uppercase, lowercase, number, special character
@@ -66,17 +66,52 @@ const userSchema = new mongoose.Schema({
       type: String,
       validate: {
         validator: function(v) {
-          return !v || v.length >= 5;
+          if (!v) return true;
+          const docType = this.kyc?.identityDocument;
+          switch(docType) {
+            case 'aadhar-card':
+              return /^\d{12}$/.test(v); // 12 digits
+            case 'pan-card':
+              return /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(v); // ABCDE1234F format
+            case 'voter-id':
+              return /^[A-Z]{3}[0-9]{7}$/.test(v); // ABC1234567 format
+            case 'passport':
+              return /^[A-Z]{1}[0-9]{7}$/.test(v); // A1234567 format
+            case 'drivers-license':
+              return /^[A-Z]{2}[0-9]{2}[0-9]{11}$/.test(v); // DL format
+            default:
+              return v.length >= 5;
+          }
         },
-        message: 'Document number must be at least 5 characters'
+        message: 'Invalid document number format for the selected document type'
       }
     },
     documentImage: String,
+    // Address Proof
+    addressProofType: {
+      type: String,
+      validate: {
+        validator: function(v) {
+          return !v || ['aadhar-address', 'voter-id', 'passport', 'utility-bill', 'bank-statement', 'rent-agreement'].includes(v);
+        },
+        message: 'Invalid address proof type'
+      }
+    },
+    addressProofNumber: String,
+    addressProofImage: String,
     status: {
       type: String,
       enum: ['pending', 'verified', 'rejected', 'not_submitted'],
       default: 'not_submitted'
-    }
+    },
+    // Grace period deadline - 15 days from first listing creation
+    deadline: {
+      type: Date,
+      default: null
+    },
+    submittedAt: Date,
+    verifiedAt: Date,
+    rejectionReason: String
   },
   isVerified: {
     type: Boolean,
@@ -133,7 +168,7 @@ userSchema.index({ location: '2dsphere' });
 userSchema.virtual('reviews', {
   ref: 'Review',
   localField: '_id',
-  foreignField: 'reviewedUser'
+  foreignField: 'host'
 });
 
 userSchema.virtual('bookings', {

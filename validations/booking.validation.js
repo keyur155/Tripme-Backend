@@ -2,7 +2,6 @@ const Joi = require('joi');
 
 // Create booking validation
 const validateBooking = (req, res, next) => {
-  
   const schema = Joi.object({
     propertyId: Joi.string()
       .optional()
@@ -21,18 +20,35 @@ const validateBooking = (req, res, next) => {
       }),
     // FIXED: Removed .greater('now') - same-day booking is allowed
     // Date validation (past dates) is done in controller using date-only comparison
+    // Daily flow dates (optional when using 24-hour flow)
     checkIn: Joi.date()
-      .required()
+      .optional()
       .messages({
-        'date.base': 'Check-in date must be a valid date',
-        'any.required': 'Check-in date is required'
+        'date.base': 'Check-in date must be a valid date'
       }),
     checkOut: Joi.date()
       .greater(Joi.ref('checkIn'))
-      .required()
+      .optional()
       .messages({
-        'date.greater': 'Check-out date must be after check-in date',
-        'any.required': 'Check-out date is required'
+        'date.greater': 'Check-out date must be after check-in date'
+      }),
+    // 24-hour flow datetime + duration
+    checkInDateTime: Joi.date()
+      .optional()
+      .messages({
+        'date.base': 'Check-in datetime must be a valid date'
+      }),
+    bookingDuration: Joi.string()
+      .valid('daily', '24hour')
+      .optional()
+      .messages({
+        'any.only': 'bookingDuration must be either daily or 24hour'
+      }),
+    extensionHours: Joi.number()
+      .valid(0, 6, 12, 18, 24)
+      .optional()
+      .messages({
+        'any.only': 'extensionHours must be 0, 6, 12, 18, or 24'
       }),
     guests: Joi.object({
       adults: Joi.number()
@@ -94,10 +110,10 @@ const validateBooking = (req, res, next) => {
         })
     }).required(),
     paymentMethod: Joi.string()
-      .valid('card', 'paypal', 'apple_pay', 'google_pay')
+      .valid('card', 'paypal', 'apple_pay', 'google_pay', 'razorpay')
       .optional()
       .messages({
-        'any.only': 'Payment method must be one of: card, paypal, apple_pay, google_pay'
+        'any.only': 'Payment method must be one of: card, paypal, apple_pay, google_pay, razorpay'
       }),
     couponCode: Joi.string()
       .max(20)
@@ -111,42 +127,72 @@ const validateBooking = (req, res, next) => {
       .messages({
         'boolean.base': 'Terms agreement must be a boolean value'
       }),
-    // Custom check-in time (HH:mm format) - for hourly booking with custom times
+    // Custom check-in time (HH:mm format) - for hourly/24h flows
     checkInTime: Joi.string()
       .pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/)
       .optional()
       .messages({
         'string.pattern.base': 'Check-in time must be in HH:mm format'
       }),
-    hourlyExtension: Joi.object({
-      hours: Joi.number()
-        .valid(6, 12, 18)
-        .optional()
-        .messages({
-          'any.only': 'Hourly extension must be 6, 12, or 18 hours'
-        }),
-      rate: Joi.number()
-        .min(0)
-        .max(1)
-        .optional()
-        .messages({
-          'number.min': 'Hourly rate must be between 0 and 1',
-          'number.max': 'Hourly rate must be between 0 and 1'
-        }),
-      totalHours: Joi.number()
-        .min(0)
-        .optional()
-        .messages({
-          'number.min': 'Total hours cannot be negative'
-        })
-    }).optional(),
+    hourlyExtension: Joi.alternatives().try(
+      Joi.object({
+        hours: Joi.number()
+          .valid(6, 12, 18)
+          .optional()
+          .messages({
+            'any.only': 'Hourly extension must be 6, 12, or 18 hours'
+          }),
+        rate: Joi.number()
+          .min(0)
+          .max(1)
+          .optional()
+          .messages({
+            'number.min': 'Hourly rate must be between 0 and 1',
+            'number.max': 'Hourly rate must be between 0 and 1'
+          }),
+        totalHours: Joi.number()
+          .min(0)
+          .optional()
+          .messages({
+            'number.min': 'Total hours cannot be negative'
+          })
+      }),
+      Joi.number().valid(0, 6, 12, 18, 24)
+    ).optional(),
     // Security fields
     idempotencyKey: Joi.string()
       .optional()
       .messages({
         'string.base': 'Idempotency key must be a string'
       }),
+    pricingToken: Joi.string()
+      .optional()
+      .messages({
+        'string.base': 'Pricing token must be a string'
+      }),
     paymentData: Joi.object({
+      // Razorpay payment fields
+      razorpayOrderId: Joi.string()
+        .optional()
+        .messages({
+          'string.base': 'Razorpay order ID must be a string'
+        }),
+      razorpayPaymentId: Joi.string()
+        .optional()
+        .messages({
+          'string.base': 'Razorpay payment ID must be a string'
+        }),
+      razorpaySignature: Joi.string()
+        .optional()
+        .messages({
+          'string.base': 'Razorpay signature must be a string'
+        }),
+      razorpayPaymentDetails: Joi.object()
+        .optional()
+        .messages({
+          'object.base': 'Razorpay payment details must be an object'
+        }),
+      // Legacy payment fields (for other payment gateways)
       amount: Joi.number()
         .min(0.01)
         .optional()
@@ -188,8 +234,19 @@ const validateBooking = (req, res, next) => {
         .optional()
         .messages({
           'number.min': 'Discount amount cannot be negative'
+        }),
+      // Additional metadata fields
+      timestamp: Joi.string()
+        .optional()
+        .messages({
+          'string.base': 'Timestamp must be a string'
+        }),
+      clientVersion: Joi.string()
+        .optional()
+        .messages({
+          'string.base': 'Client version must be a string'
         })
-    }).optional(),
+    }).optional().unknown(true), // Allow unknown fields in paymentData
     securityMetadata: Joi.object({
       userAgent: Joi.string()
         .optional()
@@ -209,8 +266,17 @@ const validateBooking = (req, res, next) => {
     }).optional()
   });
 
-  const { error } = schema.validate(req.body);
+  const { error } = schema.validate(req.body, { abortEarly: false, allowUnknown: true });
   if (error) {
+    console.error('❌ ===========================================');
+    console.error('❌ Validation failed in validateBooking');
+    console.error('❌ Error details:', error.details);
+    console.error('❌ Validation errors:', error.details.map(d => ({
+      field: d.path.join('.'),
+      message: d.message,
+      type: d.type
+    })));
+    console.error('❌ ===========================================');
     return res.status(400).json({
       success: false,
       message: 'Validation error',
@@ -575,3 +641,4 @@ module.exports = {
   validateApplyCoupon,
   validateBookingQuery
 }; 
+

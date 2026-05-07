@@ -46,6 +46,16 @@ router.get('/stats/overview',
   bookingController.getBookingStats
 );
 
+// ── PRE-PAYMENT VALIDATION ─────────────────────────────────────────────────
+// Must be called BEFORE creating a Razorpay order.
+// Runs all booking checks (params, availability, 24-hour rules) with NO payment side-effects.
+// If this passes, it is safe to open the Razorpay payment UI.
+router.post('/pre-validate',
+  bookingRateLimit,
+  securityMiddleware.auditLog('pre_validate_booking'),
+  bookingController.preValidateBooking
+);
+
 // Booking CRUD operations
 router.post('/process-payment', 
   bookingRateLimit,

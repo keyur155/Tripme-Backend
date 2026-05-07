@@ -112,8 +112,22 @@ function validateBookingParameters(bookingData) {
   const errors = [];
   const warnings = [];
   
-  // Validate dates
-  if (bookingData.checkIn && bookingData.checkOut) {
+  // Only use the explicit bookingDuration flag — daily bookings also send checkInDateTime
+  // for late check-in pricing, so we must NOT infer 24-hour mode from checkInDateTime alone.
+  const is24Hour = bookingData.bookingDuration === '24hour';
+
+  // Validate dates / times
+  if (is24Hour) {
+    if (!bookingData.checkInDateTime) {
+      errors.push('Check-in datetime is required for 24-hour booking');
+    } else {
+      const checkInDt = new Date(bookingData.checkInDateTime);
+      const now = new Date();
+      if (checkInDt < now) {
+        errors.push('24-hour check-in time cannot be in the past');
+      }
+    }
+  } else if (bookingData.checkIn && bookingData.checkOut) {
     const checkIn = new Date(bookingData.checkIn);
     const checkOut = new Date(bookingData.checkOut);
     const now = new Date();
@@ -168,10 +182,21 @@ function validateBookingParameters(bookingData) {
   }
   
   // Validate hourly extension
-  if (bookingData.hourlyExtension) {
-    const validHours = [6, 12, 18];
-    if (!validHours.includes(bookingData.hourlyExtension.hours)) {
+  if (bookingData.hourlyExtension !== undefined && bookingData.hourlyExtension !== null) {
+    const validHours = [0, 6, 12, 18, 24];
+    const hours = typeof bookingData.hourlyExtension === 'number'
+      ? bookingData.hourlyExtension
+      : bookingData.hourlyExtension.hours;
+    if (!validHours.includes(hours)) {
       errors.push('Hourly extension must be 6, 12, or 18 hours');
+    }
+  }
+
+  // Validate 24h extensionHours if provided separately
+  if (bookingData.extensionHours !== undefined && bookingData.extensionHours !== null) {
+    const validHours = [0, 6, 12, 18, 24];
+    if (!validHours.includes(bookingData.extensionHours)) {
+      errors.push('Extension hours must be 6, 12, or 18 hours');
     }
   }
   

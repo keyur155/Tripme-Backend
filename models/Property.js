@@ -60,7 +60,7 @@ const propertySchema = new mongoose.Schema({
   },
   placeType: {
     type: String,
-    enum: ['entire', 'room', 'shared'],
+    enum: ['entire', 'room','private', 'shared'],
     default: 'entire'
   },
   images: [{
@@ -78,6 +78,19 @@ const propertySchema = new mongoose.Schema({
       type: String,
       required: false
     },
+     category: {  
+    type: String,
+    enum: [
+      "Living room",
+      "Bedroom",
+      "Kitchen",
+      "Bathroom",
+      "Exterior",
+      "Amenities",
+      "Other"
+    ],
+    default: "Other"
+  },
     isPrimary: {
       type: Boolean,
       default: false
@@ -185,10 +198,20 @@ const propertySchema = new mongoose.Schema({
       }
     }
   },
-  houseRules: [{
-    type: String,
-    enum: ['no-smoking', 'no-pets', 'no-parties', 'no-loud-music', 'no-shoes', 'no-unregistered-guests']
+  // houseRules: [{
+  //   type: String,
+  //   // enum: ['no-smoking', 'no-pets', 'no-parties',  'no-unregistered-guests']
+  // }],
+  houseRules: {
+  common: [{
+    type: String
   }],
+  additional: {
+    type: Object,
+    default: {}
+  },
+  default: { common: [], additional: {} }
+},
   checkInTime: {
     type: String,
     default: '15:00'
@@ -228,7 +251,12 @@ const propertySchema = new mongoose.Schema({
 
   amenities: [{
     type: String,
-    enum: ['wifi', 'tv', 'kitchen', 'washer', 'dryer', 'ac', 'heating', 'workspace', 'pool', 'hot-tub', 'parking', 'gym', 'breakfast', 'smoke-alarm', 'carbon-monoxide-alarm', 'first-aid-kit', 'fire-extinguisher', 'essentials']
+    enum: ['wifi', 'tv', 'kitchen', 
+      'washer', 'dryer', 'ac', 'heating',
+       'workspace', 'pool', 'hot-tub', 'parking',
+        'gym', 'breakfast', 'smoke-alarm', 
+        'carbon-monoxide-alarm', 'first-aid-kit', 
+        'fire-extinguisher', 'essentials', 'fireplace' ,'security']
   }],
   features: [{
     type: String,
@@ -328,16 +356,74 @@ const propertySchema = new mongoose.Schema({
       min: 0,
       max: 5
     },
-    cleanliness: Number,
-    accuracy: Number,
-    communication: Number,
-    location: Number,
-    checkIn: Number,
-    value: Number
+    cleanliness: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 5
+    },
+    accuracy: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 5
+    },
+    communication: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 5
+    },
+    location: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 5
+    },
+    checkIn: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 5
+    },
+    value: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 5
+    }
   },
   reviewCount: {
     type: Number,
     default: 0
+  },
+  // Admin-assigned badges (override dynamic badges)
+  adminBadges: {
+    highlight: [{
+      type: { type: String },
+      label: { type: String },
+      priority: { type: Number, default: 1 }
+    }],
+    details: [{
+      type: { type: String },
+      label: { type: String },
+      priority: { type: Number, default: 1 }
+    }],
+    insights: [{
+      type: { type: String },
+      label: { type: String },
+      priority: { type: Number, default: 1 }
+    }],
+    urgency: [{
+      type: { type: String },
+      label: { type: String },
+      priority: { type: Number, default: 1 }
+    }]
+  },
+  // Flag to use admin badges instead of dynamic ones
+  useAdminBadges: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true,
@@ -369,8 +455,190 @@ propertySchema.virtual('bookings', {
   localField: '_id',
   foreignField: 'listing'
 });
+// propertySchema.virtual('badges').get(function () {
+//   const badges = [];
+
+//   // ⭐ Rating based
+//   if (this.rating?.average >= 4.5) {
+//     badges.push({ label: "Highly rated" });
+//   }
+
+//   if (this.rating?.checkIn >= 4.7) {
+//     badges.push({ label: "Exceptional check-in"});
+//   }
+
+//   if (this.rating?.location >= 4.7) {
+//     badges.push({ label: "Great location" });
+//   }
+
+//   if (this.reviewCount >= 20) {
+//     badges.push({ label: "Loved by guests" });
+//   }
+
+//   // 🆕 New
+//   const days =
+//     (Date.now() - new Date(this.createdAt)) / (1000 * 60 * 60 * 24);
+
+//   if (days < 15) {
+//     badges.push({ label: "New", icon: "🆕" });
+//   }
+
+//   // 🔥 Optional (if you add stats later)
+//   if (this.stats?.views > 1000) {
+//     badges.push({ label: "Trending" });
+//   }
+
+//   return badges;
+// });
 
 // Pre-save hook to generate slug
+
+
+const HIGHLIGHT_BADGES = [
+  {
+    type: "guest_favorite",
+    label: "Guest favourite",
+    icon: "🏆",
+    priority: 1,
+    condition: (l) => l.rating?.average >= 4.7 && l.reviewCount >= 20
+  },
+  {
+    type: "top_5_percent",
+    label: "Top 5% of homes",
+    icon: "🥇",
+    priority: 2,
+    condition: (l) => l.rankScore >= 95 // optional future
+  },
+  {
+    type: "super_host",
+    label: "Superhost",
+    icon: "⭐",
+    priority: 3,
+    condition: (l) => l.host?.rating >= 4.8 && l.host?.reviewCount > 50
+  },
+  {
+    type: "rare_find",
+    label: "Rare find",
+    icon: "💎",
+    priority: 4,
+    condition: (l) => (l.availabilityMeta?.remainingSlots || 0) <= 1
+  }
+];
+
+const DETAIL_BADGES = [
+  {
+    type: "checkin",
+    label: "Exceptional check-in",
+    icon: "🔑",
+    priority: 1,
+    condition: (l) => l.rating?.checkIn >= 4.7
+  },
+  {
+    type: "cleanliness",
+    label: "Sparkling clean",
+    icon: "🧼",
+    priority: 2,
+    condition: (l) => l.rating?.cleanliness >= 4.7
+  },
+  {
+    type: "location",
+    label: "Great location",
+    icon: "📍",
+    priority: 3,
+    condition: (l) => l.rating?.location >= 4.7
+  },
+  {
+    type: "value",
+    label: "Great value",
+    icon: "💰",
+    priority: 4,
+    condition: (l) => l.rating?.value >= 4.7
+  },
+  {
+    type: "host_exp",
+    label: "Experienced host",
+    icon: "👤",
+    priority: 5,
+    condition: (l) => l.host?.createdAt && (new Date().getFullYear() - new Date(l.host.createdAt).getFullYear()) >= 3
+  }
+];
+
+const INSIGHT_BADGES = [
+  {
+    type: "price_low",
+    label: "Price is lower than average",
+    icon: "🏷️",
+    priority: 1,
+    condition: (l) => l.pricing?.basePrice < (l.avgPrice || 0)
+  },
+  {
+    type: "high_demand",
+    label: "In high demand",
+    icon: "🔥",
+    priority: 2,
+    condition: (l) => (l.stats?.bookingsLast7Days || 0) > 5
+  },
+  {
+    type: "trending",
+    label: "Trending",
+    icon: "📈",
+    priority: 3,
+    condition: (l) => (l.stats?.views || 0) > 1000
+  }
+];
+
+const URGENCY_BADGES = [
+  {
+    type: "only_one_left",
+    label: "Only 1 left",
+    icon: "⚡",
+    priority: 1,
+    condition: (l) => (l.availabilityMeta?.remainingSlots || 0) === 1
+  },
+  {
+    type: "limited_slots",
+    label: "Limited availability",
+    icon: "⏳",
+    priority: 2,
+    condition: (l) => (l.availabilityMeta?.remainingSlots || 0) <= 3
+  }
+];
+
+const pickBadges = (list, listing, limit) => {
+  return list
+    .filter(b => b.condition(listing))
+    .sort((a, b) => a.priority - b.priority)
+    .slice(0, limit)
+    .map(({ condition, ...rest }) => rest);
+};
+
+propertySchema.virtual('badges').get(function () {
+  // Admin-only badge system: Only return badges if admin has assigned them
+  // No dynamic badges by default - badges must be explicitly assigned via admin panel
+  if (this.adminBadges) {
+    const adminHighlight = this.adminBadges.highlight || [];
+    const adminDetails = this.adminBadges.details || [];
+    const adminInsights = this.adminBadges.insights || [];
+    const adminUrgency = this.adminBadges.urgency || [];
+    
+    // Return admin badges (frontend handles icons based on badge type)
+    return {
+      highlight: adminHighlight.map(b => ({ type: b.type, label: b.label, priority: b.priority })),
+      details: adminDetails.map(b => ({ type: b.type, label: b.label, priority: b.priority })),
+      insights: adminInsights.map(b => ({ type: b.type, label: b.label, priority: b.priority })),
+      urgency: adminUrgency.map(b => ({ type: b.type, label: b.label, priority: b.priority }))
+    };
+  }
+
+  // Return empty badges if no admin badges assigned
+  return {
+    highlight: [],
+    details: [],
+    insights: [],
+    urgency: []
+  };
+});
+
 propertySchema.pre('save', function(next) {
   // Generate slug if title is modified or if slug is missing/null
   if (this.isModified('title') || !this.seo?.slug) {

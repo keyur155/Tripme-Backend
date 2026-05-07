@@ -413,6 +413,126 @@ const reversePayout = async (req, res) => {
   }
 };
 
+// @desc    Confirm payout done from Razorpay dashboard (admin)
+// @route   POST /api/payouts/admin/:id/confirm
+// @access  Private (Admin only)
+//
+// Flow:
+//   1. Admin pays the host via Razorpay dashboard (manually)
+//   2. Razorpay generates a Payout ID (e.g. pout_XXXXXX) or UTR number
+//   3. Admin opens this endpoint, enters that reference to mark the payout DONE
+const confirmPayoutDone = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      razorpayPayoutId,   // e.g. "pout_QAB1234XYZ"  (from Razorpay dashboard)
+      utrNumber,          // UTR / bank reference for IMPS/NEFT transfers
+      transactionId,      // any additional transaction ID
+      adminNotes,         // optional notes from admin
+      processedDate       // optional override; defaults to now
+    } = req.body;
+
+    if (!razorpayPayoutId && !utrNumber && !transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide at least one of: razorpayPayoutId, utrNumber, or transactionId'
+      });
+    }
+
+    const payout = await Payout.findById(id)
+      .populate('host', 'name email');
+
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payout not found'
+      });
+    }
+
+    if (payout.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Payout is already marked as completed',
+        data: { payout }
+      });
+    }
+
+    if (payout.status === 'reversed' || payout.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot confirm a payout with status: ${payout.status}`
+      });
+    }
+
+    // Build the reference string (use razorpay ID if available, fallback to UTR)
+    const reference = razorpayPayoutId || utrNumber || transactionId;
+
+    payout.status = 'completed';
+    payout.transactionId = transactionId || razorpayPayoutId || payout.transactionId;
+    payout.reference = reference;
+    payout.processedDate = processedDate ? new Date(processedDate) : new Date();
+
+    // Record who confirmed it and when
+    payout.manualPayout = {
+      processedBy: req.user._id || req.user.id,
+      processedAt: new Date(),
+      notes: adminNotes || `Confirmed via Razorpay dashboard. Ref: ${reference}`
+    };
+
+    // Store the full Razorpay payout ID in gatewayResponse for audit trail
+    payout.gatewayResponse = {
+      ...(payout.gatewayResponse || {}),
+      razorpayPayoutId,
+      utrNumber,
+      confirmedBy: req.user._id || req.user.id,
+      confirmedAt: new Date().toISOString(),
+      source: 'admin_manual_confirmation'
+    };
+
+    if (adminNotes) {
+      payout.adminNotes = adminNotes;
+    }
+
+    await payout.save();
+
+    // Notify the host
+    try {
+      await Notification.create({
+        user: payout.host._id || payout.host,
+        type: 'payout_completed',
+        title: 'Payout Completed! 🎉',
+        message: `Your payout of ₹${payout.amount} has been processed. Reference: ${reference}`,
+        data: {
+          payoutId: payout._id,
+          amount: payout.amount,
+          reference,
+          processedDate: payout.processedDate
+        }
+      });
+    } catch (notifErr) {
+      // Notification failure should not block the confirmation
+      console.warn('⚠️ Failed to send payout notification:', notifErr.message);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Payout of ₹${payout.amount} confirmed as completed. Reference: ${reference}`,
+      data: {
+        payout,
+        confirmedAt: payout.manualPayout.processedAt,
+        reference
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error confirming payout:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error confirming payout',
+      error: error.message
+    });
+  }
+};
+
 // @desc    Bulk process payouts (admin)
 // @route   POST /api/payouts/admin/bulk-process
 // @access  Private (Admin only)
@@ -487,5 +607,6 @@ module.exports = {
   getAllPayouts,
   getPayoutStats,
   reversePayout,
+  confirmPayoutDone,
   bulkProcessPayouts
 };

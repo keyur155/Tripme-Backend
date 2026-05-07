@@ -174,14 +174,18 @@ class PaymentService {
         // Payment details with transaction information
         paymentDetails: {
           transactionId: transactionId,
-          paymentGateway: paymentData.gateway || 'mock_gateway',
+          paymentGateway: paymentData.gateway || 'razorpay',
           gatewayResponse: paymentData.gatewayResponse || {
             status: 'success',
             transactionId: transactionId,
             processedAt: new Date().toISOString(),
-            gateway: paymentData.gateway || 'mock_gateway'
+            gateway: paymentData.gateway || 'razorpay'
           }
         },
+        // Razorpay specific fields
+        razorpayOrderId: paymentData.razorpayOrderId || null,
+        razorpayPaymentId: paymentData.razorpayPaymentId || null,
+        razorpaySignature: paymentData.razorpaySignature || null,
         
         // Fee breakdown
         subtotal: feeBreakdown.subtotal,

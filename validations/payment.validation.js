@@ -28,6 +28,10 @@ const validatePayment = Joi.object({
     'any.required': 'Idempotency key is required'
   }),
   paymentData: Joi.object({
+    razorpayOrderId: Joi.string().optional(),
+    razorpayPaymentId: Joi.string().optional(),
+    razorpaySignature: Joi.string().optional(),
+    razorpayPaymentDetails: Joi.object().optional(),
     amount: Joi.number().min(0.01).optional(),
     currency: Joi.string().valid('INR', 'USD', 'EUR', 'GBP').optional(),
     subtotal: Joi.number().min(0).optional(),
@@ -35,7 +39,17 @@ const validatePayment = Joi.object({
     gst: Joi.number().min(0).optional(),
     processingFee: Joi.number().min(0).optional(),
     discountAmount: Joi.number().min(0).optional()
-  }).optional(),
+  }).optional().custom((value, helpers) => {
+    if (!value) return value;
+    const hasRazorpayProof = !!(value.razorpayOrderId && value.razorpayPaymentId && value.razorpaySignature);
+    const hasAmountBundle = value.amount != null && value.subtotal != null;
+    if (!hasRazorpayProof && !hasAmountBundle) {
+      return helpers.error('any.invalid');
+    }
+    return value;
+  }, 'Razorpay proof or pricing bundle validation').messages({
+    'any.invalid': 'paymentData must include Razorpay proof fields or amount+subtotal'
+  }),
   securityMetadata: Joi.object({
     userAgent: Joi.string().optional(),
     timestamp: Joi.string().optional(),

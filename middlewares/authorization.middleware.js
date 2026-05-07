@@ -1,4 +1,5 @@
 // Authorization middleware for ensuring users can only access their own data
+const { logger } = require('../config/logger');
 
 // Check if user owns a resource
 const ownsResource = (resourceType) => {
@@ -91,7 +92,7 @@ const ownsResource = (resourceType) => {
       req.resource = resource;
       next();
     } catch (error) {
-      console.error('Authorization error:', error);
+      logger.error('Authorization error', { error: error.message });
       res.status(500).json({
         success: false,
         message: 'Authorization check failed'
@@ -130,7 +131,7 @@ const isPropertyHost = async (req, res, next) => {
     req.property = property;
     next();
   } catch (error) {
-    console.error('Property host check error:', error);
+    logger.error('Property host check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -168,7 +169,7 @@ const isServiceProvider = async (req, res, next) => {
     req.service = service;
     next();
   } catch (error) {
-    console.error('Service provider check error:', error);
+    logger.error('Service provider check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -208,11 +209,9 @@ const canAccessBooking = async (req, res, next) => {
     const isGuest = booking.user.toString() === req.user._id.toString();
     const isHost = booking.host.toString() === req.user._id.toString();
     const isAdmin = req.user.role === 'admin' || req.user.role === 'super-admin';
-
+    
     if (!isGuest && !isHost && !isAdmin) {
-      // Log unauthorized access attempt
-      console.warn(`Unauthorized booking access attempt: User ${req.user._id} tried to access booking ${bookingId}`);
-      
+      logger.warn('Unauthorized booking access attempt', { userId: req.user._id, bookingId });
       return res.status(403).json({
         success: false,
         message: 'Not authorized to access this booking'
@@ -226,16 +225,12 @@ const canAccessBooking = async (req, res, next) => {
         message: 'Account is not active. Please contact support.'
       });
     }
-
+    
     // Add booking to request for use in controllers
     req.booking = booking;
-    
-    // Log successful access
-    console.log(`Authorized booking access: User ${req.user._id} (${req.user.role}) accessed booking ${bookingId}`);
-    
     next();
   } catch (error) {
-    console.error('Booking access check error:', error);
+    logger.error('Booking access check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -274,7 +269,7 @@ const canAccessPayment = async (req, res, next) => {
     req.payment = payment;
     next();
   } catch (error) {
-    console.error('Payment access check error:', error);
+    logger.error('Payment access check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -302,9 +297,9 @@ const canAccessReview = async (req, res, next) => {
       });
     }
 
-    // User can access if they are the reviewer, reviewed user, or admin
+    // User can access if they are the reviewer, reviewed host, or admin
     const isReviewer = review.reviewer.toString() === req.user._id.toString();
-    const isReviewedUser = review.reviewedUser.toString() === req.user._id.toString();
+    const isReviewedUser = review.host?.toString() === req.user._id.toString();
     const isAdmin = req.user.role === 'admin';
 
     if (!isReviewer && !isReviewedUser && !isAdmin) {
@@ -317,7 +312,7 @@ const canAccessReview = async (req, res, next) => {
     req.review = review;
     next();
   } catch (error) {
-    console.error('Review access check error:', error);
+    logger.error('Review access check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -361,7 +356,7 @@ const canAccessWishlist = async (req, res, next) => {
     req.wishlist = wishlist;
     next();
   } catch (error) {
-    console.error('Wishlist access check error:', error);
+    logger.error('Wishlist access check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -400,7 +395,7 @@ const canAccessNotification = async (req, res, next) => {
     req.notification = notification;
     next();
   } catch (error) {
-    console.error('Notification access check error:', error);
+    logger.error('Notification access check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -443,7 +438,7 @@ const canAccessSupportTicket = async (req, res, next) => {
     req.supportTicket = ticket;
     next();
   } catch (error) {
-    console.error('Support ticket access check error:', error);
+    logger.error('Support ticket access check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -482,7 +477,7 @@ const canAccessUserProfile = async (req, res, next) => {
     req.targetUser = user;
     next();
   } catch (error) {
-    console.error('User profile access check error:', error);
+    logger.error('User profile access check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Authorization check failed'
@@ -554,7 +549,7 @@ const hasKYCVerification = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error('KYC verification check error:', error);
+    logger.error('KYC verification check error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'KYC verification check failed'

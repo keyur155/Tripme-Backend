@@ -6,9 +6,25 @@ const { generateToken } = require('../utils/generateToken');
 const { sendEmail, sendWelcomeEmail, sendPasswordResetEmail } = require('../utils/sendEmail');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-// Google OAuth client - not needed for access token approach
-// const { OAuth2Client } = require('google-auth-library');
-// const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+// Google OAuth client
+const { OAuth2Client } = require('google-auth-library');
+const googleClient = new OAuth2Client();
+
+// Initialize the client with credentials
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  googleClient.setCredentials({
+    client_id: process.env.GOOGLE_CLIENT_ID,
+    client_secret: process.env.GOOGLE_CLIENT_SECRET
+  });
+}
+
+// FRONTEND_URL may be comma-separated (e.g. on Railway where multiple origins are listed).
+// Always use the FIRST URL for links in emails.
+const getFrontendUrl = () =>
+  (process.env.FRONTEND_URL || 'http://localhost:3000')
+    .split(',')
+    .map(u => u.trim())
+    .filter(Boolean)[0] || 'http://localhost:3000';
 
 // @desc    Register user
 // @route   POST /api/auth/register
@@ -20,9 +36,15 @@ const registerUser = async (req, res) => {
     // Check if user already exists
     const userExists = await User.findOne({ email });
     if (userExists) {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: 'User already exists with this email'
+        message: 'User already exists with this email',
+        errors: [
+          {
+            field: 'email',
+            message: 'An account already exists with this email address'
+          }
+        ]
       });
     }
 
@@ -44,20 +66,23 @@ const registerUser = async (req, res) => {
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
     });
 
-    // Send verification email
-    // Use frontend URL for verification - the frontend will handle the API call
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    // Send verification email (non-blocking with timeout to avoid slowing registration on cold deploys)
+    const frontendUrl = getFrontendUrl();
     const verificationUrl = `${frontendUrl}/auth/verify-email?token=${verificationToken}`;
     console.log('Sending welcome email to:', user.email);
     console.log('Verification URL:', verificationUrl);
-    
-    try {
-      const emailResult = await sendWelcomeEmail(user.email, user.name, verificationUrl);
-      console.log('Welcome email sent successfully:', emailResult);
-    } catch (emailError) {
-      console.error('Failed to send welcome email:', emailError);
-      // Don't fail the registration if email fails
-    }
+
+    const sendEmailWithTimeout = async () => {
+      const timeoutMs = 5000;
+      const timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Email send timeout')), timeoutMs)
+      );
+      return Promise.race([sendWelcomeEmail(user.email, user.name, verificationUrl), timeout]);
+    };
+
+    sendEmailWithTimeout()
+      .then((emailResult) => console.log('Welcome email sent (async):', emailResult))
+      .catch((emailError) => console.warn('Welcome email send skipped/failed (non-blocking):', emailError.message));
     
     // User starts as unverified - they must verify their email
     // user.isVerified = false; // This is the default value
@@ -80,6 +105,29 @@ const registerUser = async (req, res) => {
       }
     });
   } catch (error) {
+    // Handle Mongoose validation errors gracefully
+    if (error.name === 'ValidationError') {
+      const errors = Object.keys(error.errors || {}).map((field) => ({
+        field,
+        message: error.errors[field].message
+      }));
+
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors
+      });
+    }
+
+    // Handle unique email race condition (just in case)
+    if (error.code === 11000 && error.keyPattern?.email) {
+      return res.status(409).json({
+        success: false,
+        message: 'User already exists with this email',
+        errors: [{ field: 'email', message: 'An account already exists with this email address' }]
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error registering user',
@@ -132,14 +180,8 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // Check if email is verified
-    if (!user.isVerified) {
-      console.log("❌ Email not verified");
-      return res.status(401).json({
-        success: false,
-        message: 'Please verify your email before logging in. Check your inbox for the verification link.'
-      });
-    }
+    // Email verification is NOT enforced at login.
+    // isVerified is returned in the response so the frontend can prompt the user to verify.
 
     // Generate JWT token
     const token = user.generateAuthToken();
@@ -244,7 +286,7 @@ const forgotPassword = async (req, res) => {
 
     // Send reset email
     // Use frontend URL for password reset - the frontend will handle the API call
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = getFrontendUrl();
     const resetUrl = `${frontendUrl}/auth/reset-password?token=${resetToken}`;
     await sendPasswordResetEmail(user.email, user.name, resetUrl);
 
@@ -426,6 +468,31 @@ const changePassword = async (req, res) => {
   }
 };
 
+
+// Helper: call Google userinfo endpoint with the user's access token directly.
+// We do NOT use googleClient.request() here because that method attaches its own
+// server-side OAuth2 credentials and overrides the Bearer token, causing a 401.
+const fetchGoogleUserInfo = (accessToken) =>
+  new Promise((resolve, reject) => {
+    const https = require('https');
+    const options = {
+      hostname: 'www.googleapis.com',
+      path: '/oauth2/v2/userinfo',
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
+        catch (e) { reject(new Error('Failed to parse Google userinfo response')); }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+
 // @desc    Social login (Google/Facebook)
 // @route   POST /api/auth/social-login
 // @access  Public
@@ -440,26 +507,32 @@ const socialLogin = async (req, res) => {
         console.log('Token length:', token ? token.length : 0);
         console.log('Token preview:', token ? token.substring(0, 20) + '...' : 'No token');
         
-        // Fetch user info using the access token
-        const googleApiUrl = `https://www.googleapis.com/oauth2/v2/userinfo?access_token=${token}`;
-        console.log('Calling Google API:', googleApiUrl);
-        
-        const userInfoResponse = await fetch(googleApiUrl);
-        
+        // Call Google userinfo directly with the user's access token
+        const userInfoResponse = await fetchGoogleUserInfo(token);
+
         console.log('Google API response status:', userInfoResponse.status);
-        console.log('Google API response headers:', Object.fromEntries(userInfoResponse.headers.entries()));
+
+        if (userInfoResponse.status !== 200) {
+            console.error('Google API error response:', userInfoResponse.data);
+            return res.status(401).json({
+              success: false,
+              message: 'Invalid Google access token',
+              debug: process.env.NODE_ENV === 'development' ? userInfoResponse.data : undefined
+            })
+          }
+        // if (!userInfoResponse.ok) {
+        //   const errorText = await userInfoResponse.text();
+        //   console.error('Google API error response:', errorText);
+        //   return res.status(401).json({
+        //     success: false,
+        //     message: 'Invalid Google access token',
+        //     debug: process.env.NODE_ENV === 'development' ? errorText : undefined
+        //   });
+        // }
+
+        const userInfo = userInfoResponse.data; 
         
-        if (!userInfoResponse.ok) {
-          const errorText = await userInfoResponse.text();
-          console.error('Google API error response:', errorText);
-          return res.status(401).json({
-            success: false,
-            message: 'Invalid Google access token',
-            debug: process.env.NODE_ENV === 'development' ? errorText : undefined
-          });
-        }
-        
-        const userInfo = await userInfoResponse.json();
+        // const userInfo = await userInfoResponse.json();
         console.log('Google API user info received:', {
           hasEmail: !!userInfo.email,
           hasName: !!userInfo.name,
@@ -569,13 +642,8 @@ const socialLogin = async (req, res) => {
       });
     }
 
-    // Check if email is verified
-    if (!user.isVerified) {
-      return res.status(401).json({
-        success: false,
-        message: 'Please verify your email before logging in. Check your inbox for the verification link.'
-      });
-    }
+    // Email verification is NOT enforced at login — users can log in with unverified emails.
+    // The isVerified flag is returned in the response so the frontend/profile can prompt verification.
 
     // Generate JWT token
     const jwtToken = user.generateAuthToken();
@@ -653,7 +721,7 @@ const resendVerificationEmail = async (req, res) => {
 
     // Send verification email
     // Use frontend URL for verification - the frontend will handle the API call
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = getFrontendUrl();
     const verificationUrl = `${frontendUrl}/auth/verify-email?token=${verificationToken}`;
     await sendWelcomeEmail(user.email, user.name, verificationUrl);
 

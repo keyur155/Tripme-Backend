@@ -80,7 +80,7 @@ export interface Booking {
   totalAmount: number;
   status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
   specialRequests?: string;
-  paymentStatus: 'pending' | 'paid' | 'refunded';
+  paymentStatus: 'pending' | 'paid' | 'refunded' | 'partially_refunded' | 'failed' | 'cancelled';
   createdAt: string;
   updatedAt: string;
 }

@@ -1,6 +1,59 @@
 const nodemailer = require('nodemailer');
+const https = require('https');
 
-// Create transporter
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL TRANSPORT STRATEGY
+// Railway (and many cloud platforms) BLOCK outbound SMTP (ports 25, 465, 587).
+// Solution: use the Resend API (HTTPS port 443) when RESEND_API_KEY is set.
+// Fallback: nodemailer SMTP for local development.
+//
+// TO FIX EMAILS ON RAILWAY:
+//   1. Sign up free at https://resend.com  (3,000 emails/month free)
+//   2. Get your API key from the Resend dashboard
+//   3. Add RESEND_API_KEY=re_xxxxxxxx to Railway environment variables
+//   4. Optionally add RESEND_FROM=TripMe <noreply@yourdomain.com>
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Send via Resend REST API (HTTPS, no SMTP port needed)
+const sendViaResend = (to, subject, html) =>
+  new Promise((resolve, reject) => {
+    const from =
+      process.env.RESEND_FROM ||
+      'TripMe <onboarding@resend.dev>'; // resend.dev domain works without custom domain verification
+    const payload = JSON.stringify({ from, to, subject, html });
+    const options = {
+      hostname: 'api.resend.com',
+      path: '/emails',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            console.log('Email sent via Resend:', parsed.id);
+            resolve({ messageId: parsed.id, accepted: [to], rejected: [] });
+          } else {
+            reject(new Error(`Resend API error ${res.statusCode}: ${data}`));
+          }
+        } catch (e) {
+          reject(new Error('Failed to parse Resend API response'));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+
+// Create nodemailer SMTP transporter (for local dev)
 const createTransporter = () => {
   // Check if SMTP is configured
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
@@ -9,15 +62,18 @@ const createTransporter = () => {
 
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
+    port: parseInt(process.env.SMTP_PORT || '587'),
     secure: process.env.SMTP_SECURE === 'true',
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
     },
     tls: {
-    rejectUnauthorized: false // ⬅ ignore self-signed cert
-  }
+      rejectUnauthorized: false
+    },
+    connectionTimeout: 10000, // 10s timeout so it fails fast instead of hanging
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
   });
 };
 
@@ -26,7 +82,7 @@ const emailTemplates = {
   welcome: (userName, verificationLink) => ({
     subject: 'Welcome to TripMe! Verify Your Email',
     html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+      <div style="font-family: jost, Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
         <!-- Header -->
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 28px; font-weight: bold;">Welcome to TripMe!</h1>
@@ -668,14 +724,94 @@ const emailTemplates = {
         <p>Best regards,<br>The TripMe Team</p>
       </div>
     `
-  })
+  }),
+
+    emailSubscription: (subscriberEmail, subscriberName, userDetails) => ({
+    subject: 'New Email Subscription - TripMe',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 28px; font-weight: bold;">New Email Subscription! 🎉</h1>
+          <p style="color: rgba(255, 255, 255, 0.9); margin: 10px 0 0 0; font-size: 16px;">Someone joined your exclusive mailing list</p>
+        </div>
+        
+        <!-- Content -->
+        <div style="padding: 40px 30px;">
+          <h2 style="color: #2c3e50; margin: 0 0 20px 0; font-size: 24px;">Subscription Details</h2>
+          
+          <!-- Subscriber Info -->
+          <div style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); padding: 25px; border-radius: 12px; margin: 25px 0; border-left: 4px solid #667eea;">
+            <h3 style="color: #2c3e50; margin: 0 0 20px 0; font-size: 20px;">👤 Subscriber Information</h3>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+              <div>
+                <p style="color: #666; font-size: 14px; margin: 0 0 5px 0; font-weight: 600;">Email Address</p>
+                <p style="color: #2c3e50; font-size: 16px; margin: 0; font-weight: 500;">${subscriberEmail}</p>
+              </div>
+              <div>
+                <p style="color: #666; font-size: 14px; margin: 0 0 5px 0; font-weight: 600;">Name</p>
+                <p style="color: #2c3e50; font-size: 16px; margin: 0; font-weight: 500;">${subscriberName || 'Not provided'}</p>
+              </div>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+              <p style="color: #666; font-size: 14px; margin: 0 0 5px 0; font-weight: 600;">Subscription Date</p>
+              <p style="color: #2c3e50; font-size: 16px; margin: 0; font-weight: 500;">${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</p>
+            </div>
+          </div>
+          
+          ${userDetails ? `
+          <!-- User Details -->
+          <div style="background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%); padding: 25px; border-radius: 12px; margin: 25px 0; border-left: 4px solid #2196f3;">
+            <h3 style="color: #1976d2; margin: 0 0 20px 0; font-size: 20px;">🔗 Registered User Details</h3>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+              <div>
+                <p style="color: #666; font-size: 14px; margin: 0 0 5px 0; font-weight: 600;">User ID</p>
+                <p style="color: #1976d2; font-size: 14px; margin: 0; font-family: monospace;">${userDetails._id}</p>
+              </div>
+              <div>
+                <p style="color: #666; font-size: 14px; margin: 0 0 5px 0; font-weight: 600;">Registered Email</p>
+                <p style="color: #2c3e50; font-size: 16px; margin: 0; font-weight: 500;">${userDetails.email}</p>
+              </div>
+            </div>
+            
+            <div style="margin-top: 15px;">
+              <p style="color: #666; font-size: 14px; margin: 0 0 5px 0; font-weight: 600;">User Name</p>
+              <p style="color: #2c3e50; font-size: 16px; margin: 0; font-weight: 500;">${userDetails.name}</p>
+            </div>
+          </div>
+          ` : ''}
+          
+          <!-- Action Items -->
+          <div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); border: 1px solid #c3e6cb; padding: 20px; border-radius: 12px; margin: 25px 0;">
+            <h4 style="color: #155724; margin: 0 0 15px 0; font-size: 18px;">📧 Next Steps</h4>
+            <ul style="color: #155724; font-size: 14px; line-height: 1.6; margin: 0; padding-left: 20px;">
+              <li>This user will receive exclusive emails and offers</li>
+              <li>You can now include them in your email marketing campaigns</li>
+              <li>User preferences can be managed in the admin panel</li>
+              <li>Send them a welcome email to engage them immediately</li>
+            </ul>
+          </div>
+        </div>
+        
+        <!-- Footer -->
+        <div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e9ecef;">
+          <p style="color: #6c757d; margin: 0; font-size: 14px;">
+            This is an automated notification from TripMe Email Subscription System
+          </p>
+        </div>
+      </div>
+    `
+  }),
 };
+
+
 
 // Send email function
 const sendEmail = async (to, template, data = {}) => {
   try {
-    const transporter = createTransporter();
-    
     if (!emailTemplates[template]) {
       console.error(`Email template '${template}' not found. Available templates:`, Object.keys(emailTemplates));
       throw new Error(`Email template '${template}' not found`);
@@ -683,7 +819,6 @@ const sendEmail = async (to, template, data = {}) => {
 
     // Handle different template signatures
     let emailContent;
-    
     if (template === 'welcome') {
       emailContent = emailTemplates[template](data.userName || 'User', data.link);
     } else if (template === 'passwordReset') {
@@ -691,38 +826,36 @@ const sendEmail = async (to, template, data = {}) => {
     } else {
       emailContent = emailTemplates[template](data.userName || 'User', data);
     }
-    
+
+    const fromAddress = process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@tripme.com';
+
+    // ── Priority 1: Resend API (works on Railway, Render, Vercel, etc.) ──────
+    if (process.env.RESEND_API_KEY) {
+      console.log(`Sending email via Resend API to: ${to}`);
+      return await sendViaResend(to, emailContent.subject, emailContent.html);
+    }
+
+    // ── Priority 2: nodemailer SMTP (local dev only) ─────────────────────────
+    const transporter = createTransporter();
+    if (!transporter) {
+      console.warn('No email transport configured (no RESEND_API_KEY or SMTP settings). Email skipped.');
+      return { messageId: `skipped-${Date.now()}`, accepted: [to], rejected: [] };
+    }
+
     const mailOptions = {
-      from: `"TripMe" <${process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@tripme.com'}>`,
-      to: to,
+      from: `"TripMe" <${fromAddress}>`,
+      to,
       subject: emailContent.subject,
       html: emailContent.html,
-      text: emailContent.html.replace(/<[^>]*>/g, ''), // Strip HTML for text version
+      text: emailContent.html.replace(/<[^>]*>/g, ''),
     };
-
-    // If SMTP is not configured, return mock result for development
-    if (!transporter) {
-      return {
-        messageId: `dev-${Date.now()}`,
-        accepted: [to],
-        rejected: [],
-        response: 'Email logged to console (development mode)'
-      };
-    }
 
     const result = await transporter.sendMail(mailOptions);
     return result;
   } catch (error) {
     console.error('Error sending email:', error);
-    if (process.env.NODE_ENV === 'development') {
-      return {
-        messageId: `error-${Date.now()}`,
-        accepted: [],
-        rejected: [to],
-        response: 'Email error logged (development mode)'
-      };
-    }
-    throw error;
+    // Never let email failure crash the caller — just log and return gracefully
+    return { messageId: `error-${Date.now()}`, accepted: [], rejected: [to], error: error.message };
   }
 };
 

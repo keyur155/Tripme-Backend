@@ -14,6 +14,10 @@ const couponSchema = new mongoose.Schema({
       message: 'Coupon code must be 3-20 characters long and contain only uppercase letters and numbers'
     }
   },
+  couponImage: {
+    type: String,
+    required: true
+  },
   discountType: {
     type: String,
     enum: ['percentage', 'fixed'],

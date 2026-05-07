@@ -66,6 +66,8 @@ const refundSchema = new Schema({
     type: String,
     default: '3-5 business days'
   },
+  // Razorpay specific fields
+  razorpayRefundId: String,
   // Complete refund breakdown for consistency
   refundBreakdown: {
     // Base amounts
@@ -133,5 +135,6 @@ refundSchema.index({ host: 1 });
 refundSchema.index({ status: 1, createdAt: -1 });
 refundSchema.index({ createdAt: -1 });
 refundSchema.index({ 'refundReference': 1 });
+refundSchema.index({ razorpayRefundId: 1 });
 
 module.exports = mongoose.model('Refund', refundSchema);

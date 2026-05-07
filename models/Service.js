@@ -19,7 +19,7 @@ const serviceSchema = new mongoose.Schema({
   },
   serviceType: {
     type: String,
-    enum: ['tour-guide', 'car-rental', 'wellness', 'chef', 'photographer', 'hairdresser', 'yoga-teacher', 'transportation', 'other'],
+    enum: ['tour-guide', 'transport', 'fitness', 'chef', 'photographer', 'hairdresser', 'yoga-teacher', 'transportation', 'other'],
     required: true
   },
   duration: {
@@ -69,7 +69,12 @@ const serviceSchema = new mongoose.Schema({
   availableSlots: [{
     startTime: Date,
     endTime: Date,
-    isAvailable: Boolean
+    isAvailable: { type: Boolean, default: true },
+    status: {
+      type: String,
+      enum: ['available', 'unavailable', 'on-hold', 'booked'],
+      default: 'available'
+    }
   }],
   pricing: {
     basePrice: {

@@ -7,7 +7,7 @@ const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
 const EMAIL = 'xyz.keyur@gmail.com';
-const NEW_PASSWORD = 'Admin@123';
+const NEW_PASSWORD = 'Keyur@123456'; // Must be at least 12 characters with uppercase, lowercase, number, and special character
 
 async function resetPassword() {
   try {
@@ -45,7 +45,8 @@ async function resetPassword() {
         $set: { 
           password: hashedPassword, 
           isVerified: true, 
-          accountStatus: 'active' 
+          accountStatus: 'active',
+          // Keep existing role
         } 
       }
     );

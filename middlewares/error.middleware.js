@@ -1,16 +1,16 @@
+const { logger } = require('../config/logger');
+
 const errorHandler = (err, req, res, next) => {
   let error = { ...err };
   error.message = err.message;
 
-  // Log error
-  console.error('Error:', {
+  // Log error (never log sensitive fields like body/headers)
+  logger.error('Request error', {
     message: err.message,
-    stack: err.stack,
     url: req.url,
     method: req.method,
     ip: req.ip,
-    userAgent: req.get('User-Agent'),
-    timestamp: new Date().toISOString()
+    statusCode: error.statusCode || 500,
   });
 
   // Mongoose bad ObjectId
@@ -120,7 +120,7 @@ const validationErrorHandler = (err, req, res, next) => {
 // Database connection error handler
 const dbErrorHandler = (err, req, res, next) => {
   if (err.name === 'MongoError' || err.name === 'MongooseError') {
-    console.error('Database error:', err);
+    logger.error('Database error', { error: err.message });
     return res.status(503).json({
       success: false,
       message: 'Database service temporarily unavailable. Please try again later.'
@@ -133,11 +133,7 @@ const dbErrorHandler = (err, req, res, next) => {
 const securityErrorHandler = (err, req, res, next) => {
   // Handle potential security issues
   if (err.message && err.message.includes('SQL injection')) {
-    console.warn('Potential SQL injection attempt:', {
-      ip: req.ip,
-      url: req.url,
-      body: req.body
-    });
+    logger.warn('Potential SQL injection attempt', { ip: req.ip, url: req.url });
     return res.status(400).json({
       success: false,
       message: 'Invalid request'
@@ -164,63 +160,22 @@ const timeoutHandler = (timeout = 30000) => {
   };
 };
 
-// Error logging middleware
+// Error logging middleware (never logs sensitive data like headers/body)
 const errorLogger = (err, req, res, next) => {
-  const errorLog = {
-    timestamp: new Date().toISOString(),
-    error: {
-      name: err.name,
-      message: err.message,
-      stack: err.stack
-    },
-    request: {
-      method: req.method,
-      url: req.url,
-      ip: req.ip,
-      userAgent: req.get('User-Agent'),
-      headers: req.headers,
-      body: req.body,
-      params: req.params,
-      query: req.query
-    },
-    user: req.user ? {
-      id: req.user.id,
-      email: req.user.email,
-      role: req.user.role
-    } : null
-  };
-
-  // Log to console in development
-  if (process.env.NODE_ENV === 'development') {
-    console.error('Error Log:', JSON.stringify(errorLog, null, 2));
-  }
-
-  // In production, you might want to log to a file or external service
-  if (process.env.NODE_ENV === 'production') {
-    // Example: Log to file or external service
-    // logger.error(errorLog);
-  }
+  logger.error('Detailed error', {
+    name: err.name,
+    message: err.message,
+    method: req.method,
+    url: req.url,
+    ip: req.ip,
+    userId: req.user?.id || null,
+    userRole: req.user?.role || null,
+  });
 
   next(err);
 };
 
-// Graceful shutdown handler
-const gracefulShutdown = (server) => {
-  return (signal) => {
-    console.log(`Received ${signal}. Starting graceful shutdown...`);
-    
-    server.close(() => {
-      console.log('HTTP server closed.');
-      process.exit(0);
-    });
-
-    // Force close after 10 seconds
-    setTimeout(() => {
-      console.error('Could not close connections in time, forcefully shutting down');
-      process.exit(1);
-    }, 10000);
-  };
-};
+// NOTE: gracefulShutdown is now handled in server.js
 
 module.exports = {
   errorHandler,
@@ -231,5 +186,4 @@ module.exports = {
   securityErrorHandler,
   timeoutHandler,
   errorLogger,
-  gracefulShutdown
 };

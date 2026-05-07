@@ -7,9 +7,10 @@ const User = require('../models/User');
 const populateWishlistItems = {
   path: 'items.itemId',
   select: 'title images price location category description',
-  model: function(doc) {
-    return doc.itemType === 'property' ? 'Property' : 'Service';
-  }
+  model: 'Property'
+  // model: function(doc) {
+  //   return doc.itemType === 'Property' ? 'Property' : 'Service';
+  // }
 };
 
 // Get user's wishlists
@@ -60,6 +61,7 @@ const getMyWishlists = async (req, res) => {
 const createWishlist = async (req, res) => {
   try {
     const { name, description, isPublic } = req.body;
+    console.log("🔥 CREATE WISHLIST HIT", req.body);
     const userId = req.user.id;
 
     const wishlist = await Wishlist.create({
@@ -197,13 +199,15 @@ const deleteWishlist = async (req, res) => {
     });
   }
 };
-
 // Add item to wishlist
 const addToWishlist = async (req, res) => {
   try {
+    console.log("req.body", req.body);
+    
     const { id } = req.params;
     const { itemType, itemId, notes } = req.body;
     const userId = req.user.id;
+
 
     const wishlist = await Wishlist.findOne({
       _id: id,
@@ -234,7 +238,7 @@ const addToWishlist = async (req, res) => {
 
     // Verify item exists
     let itemExists = false;
-    if (itemType === 'property') {
+    if (itemType === 'Property') {
       itemExists = await Property.findById(itemId);
     } else if (itemType === 'service') {
       itemExists = await Service.findById(itemId);
@@ -256,7 +260,17 @@ const addToWishlist = async (req, res) => {
     });
 
     await wishlist.save();
-    await wishlist.populate(populateWishlistItems);
+    // await wishlist.populate(populateWishlistItems);
+    // Replace the populate call with manual population
+for (const item of wishlist.items) {
+  if (item.itemType === 'Property') {
+    item.itemDetails = await Property.findById(item.itemId)
+      .select('title images price location category description');
+  } else if (item.itemType === 'Service') {
+    item.itemDetails = await Service.findById(item.itemId)
+      .select('title images price location category description');
+  }
+}
 
     res.status(201).json({
       success: true,
@@ -271,6 +285,76 @@ const addToWishlist = async (req, res) => {
     });
   }
 };
+
+
+// const addToWishlist = async (req, res) => {
+//   try {
+//     const userId = req.user.id;
+//     const listingId = req.params.id;
+//     const wishlistName = req.body.name || 'Favorites'; // Default wishlist name
+    
+//     console.log("🔥 TOGGLE WISHLIST HIT");
+//     // Atomic: find or create in ONE operation
+//      let wishlist = await Wishlist.findOne({ 
+//       user: userId, 
+//       name: wishlistName 
+//     });
+
+//      if (!wishlist) {
+//       // Create new wishlist with this property
+//       wishlist = await Wishlist.create({
+//         user: userId,
+//         name: wishlistName,
+//         items: [{
+//           itemType: 'property',
+//           itemId: listingId,
+//           addedBy: userId
+//         }]
+//       });
+//       return res.status(200).json({
+//         success: true,
+//         message: "Added to wishlist successfully"
+//       });
+//     }
+    
+   
+//      const exists = wishlist.items.some(item => 
+//       item.itemType === 'property' && item.itemId.toString() === listingId
+//     );
+
+//    if (exists) {
+//       // Remove from wishlist
+//       await Wishlist.updateOne(
+//         { user: userId, name: wishlistName },
+//         { $pull: { items: { itemType: 'property', itemId: listingId } } }
+//       );
+//       return res.status(200).json({
+//         success: true,
+//         message: "Removed from wishlist successfully"
+//       });
+//     } else {
+//       // Add to wishlist
+//       await Wishlist.updateOne(
+//         { user: userId, name: wishlistName },
+//         { $push: { items: { itemType: 'property', itemId: listingId, addedBy: userId } } }
+//       );
+
+//     res.json({
+//       success: true,
+//       liked: !exists
+//     });
+
+//   } 
+// }
+//   catch (error) {
+//     res.status(500).json({
+//       success: false,
+//       message: 'Error toggling wishlist',
+//       error: error.message
+//     });
+//   }
+// };
+
 
 // Remove item from wishlist
 const removeFromWishlist = async (req, res) => {
@@ -342,7 +426,7 @@ const shareWishlist = async (req, res) => {
       message: 'Wishlist shared successfully',
       data: {
         shareId: wishlist.shareId,
-        shareUrl: `${process.env.FRONTEND_URL}/wishlist/shared/${wishlist.shareId}`
+        shareUrl: `${(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim()}/wishlist/shared/${wishlist.shareId}`
       }
     });
   } catch (error) {

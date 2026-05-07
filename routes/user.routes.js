@@ -13,6 +13,9 @@ router.use(auth);
 router.get('/profile', userController.getUserProfile);
 router.put('/profile', validateUpdateProfile, userController.updateUserProfile);
 
+// get host by id
+router.get('/host/:id', userController.getUserProfile);
+
 // Become host
 router.post('/become-host', userController.becomeHost);
 

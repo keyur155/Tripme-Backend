@@ -7,6 +7,7 @@ const Refund = require('../models/Refund');
 const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
 const { calculateRefundBreakdown } = require('../utils/refundCalculator');
+const razorpayService = require('./razorpay.service');
 
 class RefundService {
   /**
@@ -19,6 +20,14 @@ class RefundService {
    */
   static async processRefund(bookingId, reason, type, options = {}) {
     try {
+      console.log('🔄 ===========================================');
+      console.log('🔄 REFUND SERVICE - PROCESSING REFUND');
+      console.log('🔄 ===========================================');
+      console.log('📋 Booking ID:', bookingId);
+      console.log('📝 Reason:', reason);
+      console.log('📝 Type:', type);
+      console.log('🔄 ===========================================');
+      
       const booking = await Booking.findById(bookingId)
         .populate('user', 'name email')
         .populate('host', 'name email')
@@ -32,8 +41,20 @@ class RefundService {
         throw new Error('No payment found for this booking');
       }
 
+      console.log('✅ Booking found:', booking._id);
+      console.log('✅ Payment found:', booking.payment._id);
+      console.log('💳 Razorpay Payment ID:', booking.payment.razorpayPaymentId || 'N/A');
+
       // Calculate refund amount based on scenario
       const refundData = await this.calculateRefundAmount(booking, reason, type, options);
+      
+      console.log('💰 ===========================================');
+      console.log('💰 REFUND CALCULATION');
+      console.log('💰 ===========================================');
+      console.log('💰 Refund Amount:', refundData.amount, booking.currency || 'INR');
+      console.log('💰 Original Booking Amount:', booking.totalAmount);
+      console.log('💰 Refund Type:', type);
+      console.log('💰 ===========================================');
       
       // Create refund record
       const refund = new Refund({
@@ -55,6 +76,81 @@ class RefundService {
       });
 
       await refund.save();
+      console.log('✅ Refund record created in database:', refund._id);
+      console.log('📋 Refund Reference:', refund.refundReference);
+
+      // Process refund through Razorpay if payment was made via Razorpay
+      const payment = await Payment.findById(booking.payment._id);
+      if (payment && payment.razorpayPaymentId && refundData.amount > 0) {
+        try {
+          // For host cancellations, automatically process refund
+          if (reason === 'host_cancel') {
+            console.log('🔄 ===========================================');
+            console.log('🔄 INITIATING RAZORPAY REFUND');
+            console.log('🔄 ===========================================');
+            console.log('💳 Razorpay Payment ID:', payment.razorpayPaymentId);
+            console.log('💰 Refund Amount:', refundData.amount, 'INR');
+            console.log('💰 Refund Amount (Paise):', Math.round(refundData.amount * 100));
+            console.log('📋 Refund Reference:', refund.refundReference);
+            console.log('🔄 ===========================================');
+            
+            const razorpayRefund = await razorpayService.createRefund(
+              payment.razorpayPaymentId,
+              refundData.amount,
+              `Host cancellation refund - ${refund.refundReference}`,
+              {
+                bookingId: booking._id.toString(),
+                refundReference: refund.refundReference
+              }
+            );
+
+            console.log('✅ ===========================================');
+            console.log('✅ RAZORPAY REFUND INITIATED');
+            console.log('✅ ===========================================');
+            console.log('💳 Razorpay Refund ID:', razorpayRefund.refundId);
+            console.log('💳 Original Payment ID:', razorpayRefund.paymentId);
+            console.log('💰 Refund Amount:', razorpayRefund.amount, razorpayRefund.currency);
+            console.log('📊 Refund Status:', razorpayRefund.status);
+            console.log('⚡ Refund Speed:', razorpayRefund.speed);
+            console.log('📅 Created At:', razorpayRefund.createdAt);
+            console.log('✅ ===========================================');
+
+            // Update refund with Razorpay details
+            refund.razorpayRefundId = razorpayRefund.refundId;
+            refund.gatewayResponse = razorpayRefund;
+            refund.status = 'processing'; // Move to processing since refund initiated
+            refund.processedAt = new Date();
+            await refund.save();
+
+            console.log('✅ Refund record updated with Razorpay details');
+            console.log('📊 Refund Status: processing (waiting for Razorpay webhook)');
+          } else {
+            // For other refunds, mark as pending for admin approval
+            // Admin will process refund through Razorpay after approval
+            console.log(`📋 Refund created, pending admin approval for Razorpay processing`);
+          }
+        } catch (razorpayError) {
+          console.error('❌ ===========================================');
+          console.error('❌ RAZORPAY REFUND ERROR');
+          console.error('❌ ===========================================');
+          console.error('❌ Error:', razorpayError.message);
+          console.error('❌ Stack:', razorpayError.stack);
+          console.error('❌ ===========================================');
+          // Don't fail the refund creation, but log the error
+          refund.adminNotes = (refund.adminNotes || '') + ` | Razorpay refund error: ${razorpayError.message}`;
+          await refund.save();
+          // Refund record is created, but Razorpay processing failed
+          // Admin can retry manually
+        }
+      } else {
+        if (!payment) {
+          console.log('⚠️ Payment not found - skipping Razorpay refund');
+        } else if (!payment.razorpayPaymentId) {
+          console.log('⚠️ No Razorpay Payment ID - payment was not made via Razorpay');
+        } else if (refundData.amount <= 0) {
+          console.log('⚠️ Refund amount is 0 - skipping Razorpay refund');
+        }
+      }
 
       // Update booking refund status
       booking.refundAmount = refundData.amount;
@@ -62,8 +158,19 @@ class RefundService {
       booking.refundStatus = refundData.amount > 0 ? 'pending' : 'not_applicable';
       await booking.save();
 
+      console.log('✅ Booking updated with refund details');
+      console.log('✅ ===========================================');
+      console.log('✅ REFUND PROCESSING COMPLETE');
+      console.log('✅ ===========================================');
+
       return refund;
     } catch (error) {
+      console.error('❌ ===========================================');
+      console.error('❌ REFUND PROCESSING FAILED');
+      console.error('❌ ===========================================');
+      console.error('❌ Error:', error.message);
+      console.error('❌ Stack:', error.stack);
+      console.error('❌ ===========================================');
       throw new Error(`Refund processing failed: ${error.message}`);
     }
   }
@@ -545,6 +652,57 @@ class RefundService {
       approvedBy: adminId,
       adminNotes: adminNotes || 'Refund completed by admin'
     });
+  }
+
+  /**
+   * Process refund through Razorpay (called when admin approves or for host cancellations)
+   * @param {string} refundId - Refund ID
+   * @returns {Object} Updated refund with Razorpay details
+   */
+  static async processRazorpayRefund(refundId) {
+    try {
+      const refund = await Refund.findById(refundId)
+        .populate('payment')
+        .populate('booking');
+
+      if (!refund) {
+        throw new Error('Refund not found');
+      }
+
+      const payment = refund.payment;
+      if (!payment.razorpayPaymentId) {
+        throw new Error('Payment was not made through Razorpay');
+      }
+
+      if (refund.razorpayRefundId) {
+        console.log(`ℹ️ Refund already processed through Razorpay: ${refund.razorpayRefundId}`);
+        return refund;
+      }
+
+      // Create refund through Razorpay
+      const razorpayRefund = await razorpayService.createRefund(
+        payment.razorpayPaymentId,
+        refund.amount,
+        `Refund for ${refund.reason} - ${refund.refundReference}`,
+        {
+          bookingId: refund.booking._id.toString(),
+          refundReference: refund.refundReference
+        }
+      );
+
+      // Update refund with Razorpay details
+      refund.razorpayRefundId = razorpayRefund.refundId;
+      refund.gatewayResponse = razorpayRefund;
+      refund.status = 'processing';
+      refund.processedAt = new Date();
+      await refund.save();
+
+      console.log(`✅ Razorpay refund processed: ${razorpayRefund.refundId}`);
+      return refund;
+    } catch (error) {
+      console.error('❌ Error processing Razorpay refund:', error);
+      throw new Error(`Failed to process Razorpay refund: ${error.message}`);
+    }
   }
 }
 

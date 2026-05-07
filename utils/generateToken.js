@@ -207,11 +207,19 @@ const extractTokenFromHeader = (authHeader) => {
   return authHeader.substring(7);
 };
 
-// Token blacklist (in production, use Redis)
+// Token blacklist (in production, use Redis instead of in-memory Set)
+const MAX_BLACKLIST_SIZE = 10000;
 const tokenBlacklist = new Set();
 
 const blacklistToken = (token) => {
-  tokenBlacklist.add(token);
+  // Prevent unbounded growth — evict expired tokens first
+  if (tokenBlacklist.size >= MAX_BLACKLIST_SIZE) {
+    cleanupBlacklist();
+  }
+  // If still over limit after cleanup, skip (stale tokens will expire naturally)
+  if (tokenBlacklist.size < MAX_BLACKLIST_SIZE) {
+    tokenBlacklist.add(token);
+  }
 };
 
 const isTokenBlacklisted = (token) => {
@@ -227,8 +235,9 @@ const cleanupBlacklist = () => {
   }
 };
 
-// Set up periodic cleanup
-setInterval(cleanupBlacklist, 60 * 60 * 1000); // Every hour
+// Set up periodic cleanup — store ref so it can be cleared on shutdown
+const _blacklistCleanupInterval = setInterval(cleanupBlacklist, 60 * 60 * 1000);
+_blacklistCleanupInterval.unref(); // Don't keep process alive just for this
 
 module.exports = {
   generateJWTToken,

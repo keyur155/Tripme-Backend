@@ -7,7 +7,7 @@ const wishlistSchema = new Schema({
   description: { type: String },
   isPublic: { type: Boolean, default: false },
   items: [{
-    itemType: { type: String, enum: ['property', 'service'], required: true },
+    itemType: { type: String, enum: ['Property', 'Service'], required: true },
     itemId: { type: Schema.Types.ObjectId, required: true, refPath: 'items.itemType' },
     notes: { type: String },
     addedBy: { type: Schema.Types.ObjectId, ref: 'User' },

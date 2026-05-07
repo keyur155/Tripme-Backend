@@ -4,6 +4,7 @@
  */
 
 const PricingConfig = require('../models/PricingConfig');
+const { logger } = require('../config/logger');
 
 /**
  * Round to two decimal places consistently
@@ -23,9 +24,28 @@ async function getCurrentPlatformFeeRate() {
     const rate = await PricingConfig.getCurrentPlatformFeeRate();
     return rate;
   } catch (error) {
-    console.error('❌ Error fetching platform fee rate:', error);
-    console.warn('⚠️ Using fallback platform fee rate: 15%');
-    return 0.15; // Fallback with warning
+    logger.error('Error fetching platform fee rate, using model default', { error: error.message });
+    return 0.03; // Schema default fallback
+  }
+}
+
+/**
+ * Get full current fee configuration (platform, GST, processing)
+ * Falls back to defaults if DB is missing.
+ */
+async function getCurrentFeeConfig() {
+  try {
+    const cfg = await PricingConfig.getCurrentPricingConfig();
+    return cfg;
+  } catch (error) {
+    logger.error('Error fetching pricing config, using PricingConfig schema defaults', { error: error.message });
+    // Return the same defaults defined in the PricingConfig model schema
+    return {
+      platformFeeRate: 0.03,
+      gstRate: 0.18,
+      processingFeeRate: 0.029,
+      processingFeeFixed: 30
+    };
   }
 }
 
@@ -48,17 +68,18 @@ async function calculate24HourPricing(params) {
     currency = 'INR'
   } = params;
 
-  // Get current platform fee rate from database
-  const platformFeeRate = await getCurrentPlatformFeeRate();
+  // Get current fee config from database
+  const { platformFeeRate, gstRate, processingFeeRate, processingFeeFixed } = await getCurrentFeeConfig();
 
   // Base calculation for 24 hours
   let baseAmount = basePrice24Hour;
   
   // Add extra hours beyond 24 (using existing extension logic)
+  let extraHoursCost = 0;
   if (totalHours > 24) {
     const extraHours = totalHours - 24;
-    const extensionCost = calculateHourlyExtension(basePrice24Hour, extraHours);
-    baseAmount += extensionCost;
+    extraHoursCost = calculateHourlyExtension(basePrice24Hour, extraHours);
+    // Do NOT add to baseAmount here so it shows separately in the UI breakdown
   }
   
   // Add extra guest charges
@@ -70,7 +91,7 @@ async function calculate24HourPricing(params) {
   const hostFees = cleaningFee + serviceFee;
   
   // Add hourly extension
-  const extensionCost = hourlyExtension || 0;
+  const extensionCost = (hourlyExtension || 0) + extraHoursCost;
   
   // Calculate subtotal for host earning (excluding security deposit)
   const hostSubtotal = baseAmount + hostFees + extensionCost - discountAmount;
@@ -81,11 +102,11 @@ async function calculate24HourPricing(params) {
   // Calculate TripMe service fee (on host subtotal only, not security deposit)
   const platformFee = toTwoDecimals(hostSubtotal * platformFeeRate);
   
-  // Calculate GST (18% of total subtotal including security deposit)
-  const gst = toTwoDecimals(totalSubtotal * 0.18);
+  // Calculate GST (configurable, on total subtotal including security deposit)
+  const gst = toTwoDecimals(totalSubtotal * gstRate);
   
-  // Calculate processing fee (2.9% + ₹30 fixed on total subtotal)
-  const processingFee = toTwoDecimals(totalSubtotal * 0.029 + 30);
+  // Calculate processing fee (configurable rate + fixed on total subtotal)
+  const processingFee = toTwoDecimals(totalSubtotal * processingFeeRate + processingFeeFixed);
   
   // Calculate total amount (what customer pays)
   const totalAmount = toTwoDecimals(totalSubtotal + platformFee + gst + processingFee);
@@ -133,7 +154,10 @@ async function calculate24HourPricing(params) {
     currency,
     
     // Rate used for calculation
-    platformFeeRate: platformFeeRate,
+    platformFeeRate,
+    gstRate,
+    processingFeeRate,
+    processingFeeFixed,
     
     // Breakdown for display
     breakdown: {
@@ -203,8 +227,8 @@ async function calculatePricingBreakdown(params) {
     return await calculate24HourPricing(params);
   }
 
-  // Get current platform fee rate from database
-  const platformFeeRate = await getCurrentPlatformFeeRate();
+  // Get current fee config from database
+  const { platformFeeRate, gstRate, processingFeeRate, processingFeeFixed } = await getCurrentFeeConfig();
 
   // Calculate base amount
   let baseAmount = basePrice * nights;
@@ -229,11 +253,11 @@ async function calculatePricingBreakdown(params) {
   // Calculate TripMe service fee (on host subtotal only, not security deposit)
   const platformFee = toTwoDecimals(hostSubtotal * platformFeeRate);
   
-  // Calculate GST (18% of total subtotal including security deposit)
-  const gst = toTwoDecimals(totalSubtotal * 0.18);
+  // Calculate GST (configurable, on total subtotal including security deposit)
+  const gst = toTwoDecimals(totalSubtotal * gstRate);
   
-  // Calculate processing fee (2.9% + ₹30 fixed on total subtotal)
-  const processingFee = toTwoDecimals(totalSubtotal * 0.029 + 30);
+  // Calculate processing fee (configurable rate + fixed on total subtotal)
+  const processingFee = toTwoDecimals(totalSubtotal * processingFeeRate + processingFeeFixed);
   
   // Calculate total amount (what customer pays)
   const totalAmount = toTwoDecimals(totalSubtotal + platformFee + gst + processingFee);
@@ -428,8 +452,11 @@ function validate24HourBooking(params) {
     const checkIn = new Date(checkInDateTime);
     const now = new Date();
     
-    if (checkIn < now) {
-      errors.push('Check-in time cannot be in the past');
+    // Allow up to 1 hour in the past to account for payment processing delays.
+    // e.g., user selects check-in time on room page, then completes payment a few minutes later.
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    if (checkIn < oneHourAgo) {
+      errors.push('Check-in time cannot be more than 1 hour in the past');
     }
   }
   

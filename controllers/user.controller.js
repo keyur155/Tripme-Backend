@@ -5,6 +5,7 @@ const Booking = require('../models/Booking');
 const Review = require('../models/Review');
 const Wishlist = require('../models/Wishlist');
 const Notification = require('../models/Notification');
+const Host = require('../models/Host');
 
 // @desc    Get user profile
 // @route   GET /api/users/:id
@@ -41,10 +42,9 @@ const getUserProfile = async (req, res) => {
     }
 
     // Get recent reviews received
-    const reviews = await Review.find({ reviewedUser: id, isPublished: true })
+    const reviews = await Review.find({ host: id, isPublic: true })
       .populate('reviewer', 'name profileImage')
-      .populate('listing', 'title')
-      .populate('service', 'title')
+      .populate('property', 'title')
       .sort({ createdAt: -1 })
       .limit(5);
 
@@ -71,7 +71,17 @@ const getUserProfile = async (req, res) => {
 // @access  Private
 const becomeHost = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    // req.user is already the user object from auth middleware
+    // Get the full user document to ensure we have all fields
+    const userId = req.user._id || req.user.id;
+    if (!userId) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const user = await User.findById(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -82,9 +92,11 @@ const becomeHost = async (req, res) => {
 
     // Check if user is already a host
     if (user.role === 'host') {
-      return res.status(400).json({
-        success: false,
-        message: 'User is already a host'
+      // Return success with current user data (already a host)
+      return res.status(200).json({
+        success: true,
+        message: 'User is already a host',
+        data: { user }
       });
     }
 
@@ -96,55 +108,49 @@ const becomeHost = async (req, res) => {
       });
     }
 
-    // Check if user has submitted KYC documents
-    if (!user.kyc || user.kyc.status === 'not_submitted') {
-      return res.status(400).json({
-        success: false,
-        message: 'Please submit KYC documents before applying to become a host'
-      });
+    // Upgrade to host role immediately
+    // KYC is required for publishing listings, not for becoming a host
+    user.role = 'host';
+    
+    // Set KYC deadline if not already set (15 days from now)
+    if (!user.kyc) {
+      user.kyc = {
+        status: 'not_submitted',
+        deadline: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000) // 15 days
+      };
+    } else if (!user.kyc.deadline) {
+      user.kyc.deadline = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
     }
+    
+    await user.save();
 
-    // Check if KYC is pending
-    if (user.kyc && user.kyc.status === 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: 'Your KYC application is under review. Please wait for approval.'
-      });
-    }
+    let host = await Host.findOne({ user: user._id });
 
-    // Check if KYC was rejected
-    if (user.kyc && user.kyc.status === 'rejected') {
-      return res.status(400).json({
-        success: false,
-        message: 'Your KYC was rejected. Please submit new documents and try again.'
-      });
-    }
-
-    // If KYC is verified, upgrade to host
-    if (user.kyc && user.kyc.status === 'verified') {
-      user.role = 'host';
-      await user.save();
-
-      // Create notification for user
-      await Notification.create({
+    if (!host) {
+      host = await Host.create({
         user: user._id,
-        type: 'system',
-        title: 'Welcome to Hosting!',
-        message: 'Congratulations! You are now a host. You can start creating listings and services.',
-        metadata: { newRole: 'host' }
-      });
-
-      res.status(200).json({
-        success: true,
-        message: 'Successfully upgraded to host role',
-        data: { user }
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        message: 'KYC verification required before becoming a host'
+        hostingSince: new Date(),
       });
     }
+
+    // Create notification for user
+    await Notification.create({
+      user: user._id,
+      type: 'system',
+      title: 'Welcome to Hosting!',
+      message: 'You are now a host! Complete KYC verification within 15 days to publish your listings.',
+      metadata: { newRole: 'host', kycDeadline: user.kyc.deadline }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Successfully upgraded to host role. Complete KYC to publish listings.',
+      data: { 
+        user,
+        kycRequired: true,
+        kycDeadline: user.kyc.deadline
+      }
+    });
   } catch (error) {
     res.status(500).json({
       success: false,

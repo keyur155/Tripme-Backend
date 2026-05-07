@@ -6,6 +6,64 @@ const Wishlist = require('../models/Wishlist');
 const Notification = require('../models/Notification');
 const slugify = require('slugify');
 
+
+// helper function to count badges 
+const generateBadges = (listing) => {
+  const badges = [];
+
+  if (listing.stats?.views > 1000) {
+    badges.push({
+      type: "trending",
+      label: "Trending",
+      description: "This listing is getting a lot of attention."
+    });
+  }
+
+  if (listing.stats?.bookings > 50) {
+    badges.push({
+      type: "popular",
+      label: "Popular choice",
+      description: "Guests frequently book this place."
+    });
+  }
+
+  if (listing.stats?.bookingsLast7Days > 5) {
+    badges.push({
+      type: "high_demand",
+      label: "High demand",
+      description: "Booked multiple times recently."
+    });
+  }
+
+  if (listing.availability?.remainingSlots < 3) {
+    badges.push({
+      type: "rare",
+      label: "Rare find",
+      description: "Limited availability left."
+    });
+  }
+
+  if (listing.ratings?.avgRating >= 4.5) {
+    badges.push({
+      type: "rating",
+      label: "Highly rated",
+      description: "Guests love this place."
+    });
+  }
+
+  const daysSinceCreated =
+    (Date.now() - new Date(listing.createdAt)) / (1000 * 60 * 60 * 24);
+
+  if (daysSinceCreated < 15) {
+    badges.push({
+      type: "new",
+      label: "New",
+      description: "Recently added listing."
+    });
+  }
+
+  return badges;
+};
 // Helper function to transform listing data for frontend
 const transformListingForFrontend = (listing) => {
   const transformed = listing.toObject ? listing.toObject() : listing;
@@ -40,7 +98,8 @@ const transformListingForFrontend = (listing) => {
     location: {
       ...transformed.location,
       coordinates: transformed.location?.coordinates || transformed.coordinates
-    }
+    },
+    badges: transformed.badges
   };
 };
 
@@ -79,6 +138,42 @@ const createListing = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: 'Only hosts can create listings'
+      });
+    }
+
+    // Check KYC status - required for publishing listings
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if KYC is verified or within grace period
+    const kycStatus = user.kyc?.status || 'not_submitted';
+    let kycDeadline = user.kyc?.deadline;
+    
+    // If this is the first listing and no deadline set, set 15-day grace period
+    if (!kycDeadline && kycStatus !== 'verified') {
+      const gracePeriodDays = 15;
+      kycDeadline = new Date();
+      kycDeadline.setDate(kycDeadline.getDate() + gracePeriodDays);
+      
+      // Update user with grace period deadline
+      await User.findByIdAndUpdate(req.user.id, {
+        'kyc.deadline': kycDeadline
+      });
+    }
+    
+    const isWithinGracePeriod = kycDeadline && new Date(kycDeadline) > new Date();
+    
+    // If KYC not submitted and grace period expired, block publishing
+    if (kycStatus !== 'verified' && kycStatus !== 'pending' && !isWithinGracePeriod) {
+      return res.status(403).json({
+        success: false,
+        message: 'KYC verification is required to publish listings. Your grace period has expired.',
+        kycRequired: true
       });
     }
 
@@ -470,6 +565,7 @@ const getListing = async (req, res) => {
       if (listingObj.images && Array.isArray(listingObj.images)) {
         listingObj.images = listingObj.images.map((image, index) => ({
           url: image.url,
+          category: image.category || "Other",
           publicId: image.publicId,
           isPrimary: image.isPrimary || index === 0, // Ensure isPrimary is set
           caption: image.caption || '',
@@ -482,6 +578,7 @@ const getListing = async (req, res) => {
       responseData = listingObj;
     } else {
       responseData = transformListingForFrontend(listing);
+      // Badges are now handled via the Property model virtual (dynamic or admin-assigned)
     }
     
 
@@ -965,6 +1062,39 @@ const getFeaturedListings = async (req, res) => {
   }
 };
 
+
+// @desc    Get featured listings
+// @route   GET /api/listings/featured
+// @access  Public
+const getSponseredListings = async (req, res) => {
+  try {
+    const { limit = 6 } = req.query;
+
+    const listings = await Property.find({
+      status: 'published',
+      approvalStatus: 'approved',
+      isSponsored: true
+    })
+      .populate('host', 'name profileImage')
+      .sort({ rating: -1, reviewCount: -1 })
+      .limit(Number(limit));
+
+    // Transform featured listings for frontend
+    const transformedFeaturedListings = listings.map(transformListingForFrontend);
+
+    res.status(200).json({
+      success: true,
+      data: { listings: transformedFeaturedListings }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching featured listings',
+      error: error.message
+    });
+  }
+};
+
 // @desc    Get similar listings
 // @route   GET /api/listings/:id/similar
 // @access  Public
@@ -1018,6 +1148,7 @@ module.exports = {
   addToWishlist,
   removeFromWishlist,
   getFeaturedListings,
+  getSponseredListings,
   getSimilarListings,
   publishListing,
   publishApprovedListing,

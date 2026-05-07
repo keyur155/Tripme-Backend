@@ -45,9 +45,16 @@ class AvailabilityService {
   static async blockTimeSlot(propertyId, startDateTime, endDateTime, bookingId) {
     try {
       const duration = (endDateTime - startDateTime) / (1000 * 60 * 60); // hours
+      const dateOnly = new Date(
+        startDateTime.getFullYear(),
+        startDateTime.getMonth(),
+        startDateTime.getDate(),
+        0, 0, 0, 0
+      );
       
       const availability = new Availability({
         property: propertyId,
+        date: dateOnly, // satisfy unique property+date index for 24h records
         startDateTime,
         endDateTime,
         duration,

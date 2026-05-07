@@ -17,6 +17,7 @@ const createCoupon = async (req, res) => {
 
     const {
       code,
+      couponImage,
       discountType,
       amount,
       maxDiscount,
@@ -39,6 +40,7 @@ const createCoupon = async (req, res) => {
 
     const coupon = await Coupon.create({
       code: code.toUpperCase(),
+      couponImage,
       discountType,
       amount,
       maxDiscount,
@@ -258,15 +260,15 @@ const deleteCoupon = async (req, res) => {
 // @access  Public
 const validateCoupon = async (req, res) => {
   try {
-    const { code, bookingAmount, listingId, serviceId, userId } = req.body;
-
+    const { couponCode, bookingAmount, listingId, serviceId, userId } = req.body;
+    console.log('req body', req.body);
     const coupon = await Coupon.findOne({
-      code: code.toUpperCase(),
+      code: couponCode.toUpperCase(),
       isActive: true,
       validFrom: { $lte: new Date() },
       validTo: { $gte: new Date() }
     });
-
+    console.log('coupon', coupon);
     if (!coupon) {
       return res.status(400).json({
         success: false,
@@ -344,7 +346,7 @@ const validateCoupon = async (req, res) => {
       message: 'Coupon is valid',
       data: {
         coupon: {
-          code: coupon.code,
+          code: coupon.couponCode,
           discountType: coupon.discountType,
           amount: coupon.amount,
           maxDiscount: coupon.maxDiscount
@@ -556,7 +558,7 @@ const getPublicActiveCoupons = async (req, res) => {
     };
 
     const coupons = await Coupon.find(query)
-      .select('code discountType amount maxDiscount minBookingAmount validFrom validTo usageLimit usedCount')
+      .select('code couponImage discountType amount maxDiscount minBookingAmount validFrom validTo usageLimit usedCount')
       .sort({ createdAt: -1 })
       .limit(parseInt(limit));
 

@@ -5,7 +5,11 @@ const User = require('../models/User');
 const Coupon = require('../models/Coupon');
 const Refund = require('../models/Refund');
 const Notification = require('../models/Notification');
+const Service = require('../models/Service');
 const PaymentService = require('../services/payment.service');
+const razorpayService = require('../services/razorpay.service');
+const { logger } = require('../config/logger');
+const { verifyPricingToken } = require('../middlewares/pricingSecurity.middleware');
 const { 
   verifyPaymentAmount, 
   validateBookingParameters,
@@ -85,8 +89,8 @@ const processPayment = async (req, res) => {
       });
     }
     
-    // Verify payment amount if provided
-    if (paymentData) {
+    // Verify payment amount only when pricing fields are present
+    if (paymentData && paymentData.amount != null && paymentData.subtotal != null) {
       const amountVerification = verifyPaymentAmount(paymentData, {
         basePrice: booking.listing?.pricing?.basePrice || booking.service?.pricing?.basePrice || 0,
         nights: booking.bookingDuration === 'daily' ? 
@@ -161,17 +165,99 @@ const processPayment = async (req, res) => {
       }
     }
     
+    if (!paymentData || !paymentData.razorpayOrderId || !paymentData.razorpayPaymentId || !paymentData.razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message: 'Razorpay payment proof is required'
+      });
+    }
+
+    // Verify Razorpay payment
+    let razorpayOrderId = paymentData.razorpayOrderId;
+    let razorpayPaymentId = paymentData.razorpayPaymentId;
+    let razorpaySignature = paymentData.razorpaySignature;
+    let isPaymentVerified = false;
+    let razorpayPaymentDetails = null;
+
+    {
+      // Verify payment signature
+      isPaymentVerified = razorpayService.verifyPayment(
+        razorpayOrderId,
+        razorpayPaymentId,
+        razorpaySignature
+      );
+
+      if (!isPaymentVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid payment signature. Payment verification failed.'
+        });
+      }
+
+      // Get payment details from Razorpay
+      try {
+        razorpayPaymentDetails = await razorpayService.getPaymentDetails(razorpayPaymentId);
+      } catch (razorpayError) {
+        logger.error('Error fetching Razorpay payment details', { error: razorpayError.message });
+        return res.status(400).json({
+          success: false,
+          message: 'Failed to verify payment with Razorpay',
+          error: razorpayError.message
+        });
+      }
+
+      const expectedAmountPaise = Math.round(Number(booking.totalAmount) * 100);
+      const expectedCurrency = booking.currency || 'INR';
+      const razorpayStatus = razorpayPaymentDetails?.status;
+
+      if (razorpayPaymentDetails?.order_id !== razorpayOrderId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Razorpay order mismatch'
+        });
+      }
+
+      const paidAmountPaise = Number(razorpayPaymentDetails?.amount);
+      const amountDiff = Math.abs(paidAmountPaise - expectedAmountPaise);
+      // Allow tolerance of ₹1 (100 paise) to avoid false mismatches due to rounding
+      if (amountDiff > 100) {
+        return res.status(400).json({
+          success: false,
+          message: 'Razorpay amount mismatch',
+          error: `Expected ${expectedAmountPaise}, got ${paidAmountPaise}`,
+          amountDiffPaise: amountDiff
+        });
+      }
+
+      if (razorpayPaymentDetails?.currency !== expectedCurrency) {
+        return res.status(400).json({
+          success: false,
+          message: 'Razorpay currency mismatch'
+        });
+      }
+
+      if (!['authorized', 'captured'].includes(razorpayStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: `Payment status is not successful: ${razorpayStatus || 'unknown'}`
+        });
+      }
+    }
+
     // Process payment using PaymentService with enhanced security
     const paymentServiceData = {
       paymentMethod,
-      transactionId: `TXN_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      gateway: 'mock', // TODO: Integrate with actual payment gateway
-      gatewayResponse: { status: 'success' },
+      transactionId: razorpayPaymentId || `TXN_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      gateway: 'razorpay',
+      gatewayResponse: razorpayPaymentDetails,
       ipAddress: ipAddress || req.ip,
       userAgent: userAgent || req.get('User-Agent'),
       source: 'web',
       sessionId,
       idempotencyKey,
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
       securityMetadata: {
         userAgent: req.get('User-Agent'),
         ipAddress: req.ip,
@@ -189,14 +275,14 @@ const processPayment = async (req, res) => {
     booking.status = 'confirmed';
     booking.paymentStatus = 'paid';
     await booking.save();
-    console.log(`✅ Booking ${bookingId} confirmed after payment processing`);
+    logger.info('Booking confirmed after payment processing', { bookingId });
     
     // Update availability status to 'booked' after successful payment
     try {
       const { updateAvailabilityStatus } = require('./availability.controller');
       await updateAvailabilityStatus(booking._id, 'booked');
     } catch (availabilityError) {
-      console.error('Error updating availability status:', availabilityError);
+      logger.error('Error updating availability status', { error: availabilityError.message });
       // Don't fail the payment if availability update fails
     }
     
@@ -246,7 +332,7 @@ const confirmPayment = async (req, res) => {
         status: 'confirmed',
         paymentStatus: 'paid'
       });
-      console.log(`✅ Booking ${payment.booking} confirmed after payment`);
+      logger.info('Booking confirmed after payment', { bookingId: payment.booking });
     }
     
     res.status(200).json({ 
@@ -772,7 +858,8 @@ const setDefaultPaymentMethod = async (req, res) => {
 const stripeWebhook = async (req, res) => {
   try {
     const signature = req.get('stripe-signature');
-    const payload = JSON.stringify(req.body);
+    const payload = req.rawBody || (Buffer.isBuffer(req.body) ? req.body.toString('utf8') : JSON.stringify(req.body));
+    const parsedBody = Buffer.isBuffer(req.body) ? JSON.parse(payload) : req.body;
     
     // Verify webhook signature (when real Stripe is integrated)
     if (process.env.STRIPE_WEBHOOK_SECRET) {
@@ -783,7 +870,7 @@ const stripeWebhook = async (req, res) => {
       );
       
       if (!isValidSignature) {
-        console.error('❌ Invalid webhook signature');
+        logger.warn('Invalid Stripe webhook signature');
         return res.status(400).json({ 
           success: false, 
           message: 'Invalid webhook signature' 
@@ -792,16 +879,13 @@ const stripeWebhook = async (req, res) => {
     }
     
     // Log webhook for security audit
-    console.log('🔒 Webhook received:', {
-      timestamp: new Date().toISOString(),
-      signature: signature ? 'present' : 'missing',
-      payload: req.body,
+    logger.info('Stripe webhook received', {
+      event: parsedBody?.type || null,
       ip: req.ip,
-      userAgent: req.get('User-Agent')
     });
     
     // Process webhook based on event type
-    const event = req.body;
+    const event = parsedBody;
     
     switch (event.type) {
       case 'payment_intent.succeeded':
@@ -811,12 +895,12 @@ const stripeWebhook = async (req, res) => {
         await handleWebhookPaymentFailure(event.data.object);
         break;
       default:
-        console.log(`Unhandled event type: ${event.type}`);
+        logger.debug('Unhandled Stripe event type', { type: event.type });
     }
     
     res.status(200).json({ received: true });
   } catch (error) {
-    console.error('❌ Webhook processing error:', error);
+    logger.error('Stripe webhook processing error', { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Error processing webhook',
@@ -846,10 +930,10 @@ const handlePaymentSuccess = async (paymentIntent) => {
         await booking.save();
       }
       
-      console.log('✅ Payment confirmed:', payment._id);
+      logger.info('Stripe payment confirmed', { paymentId: payment._id });
     }
   } catch (error) {
-    console.error('❌ Error handling payment success:', error);
+    logger.error('Error handling Stripe payment success', { error: error.message });
   }
 };
 
@@ -873,10 +957,10 @@ const handleWebhookPaymentFailure = async (paymentIntent) => {
         await booking.save();
       }
       
-      console.log('❌ Payment failed:', payment._id);
+      logger.warn('Stripe payment failed', { paymentId: payment._id });
     }
   } catch (error) {
-    console.error('❌ Error handling payment failure:', error);
+    logger.error('Error handling Stripe payment failure', { error: error.message });
   }
 };
 
@@ -892,6 +976,610 @@ const paypalWebhook = async (req, res) => {
       message: 'Error processing webhook',
       error: error.message
     });
+  }
+};
+
+// @desc    Create Razorpay order
+// @route   POST /api/payments/create-order
+// @access  Private
+const createRazorpayOrder = async (req, res) => {
+  try {
+    const { bookingId, propertyId, serviceId,amount, currency = 'INR', pricingToken, pricingContext } = req.body;
+    let finalAmount = null;
+    let finalCurrency = currency;
+    let finalPropertyId = propertyId || null;
+    // If bookingId is provided, verify booking exists and user owns it.
+    // Amount must come from booking total, never from client amount.
+    if (bookingId) {
+      const booking = await Booking.findById(bookingId);
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          message: 'Booking not found'
+        });
+      }
+
+      if (booking.user.toString() !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to create payment for this booking'
+        });
+      }
+
+      finalAmount = Number(booking.totalAmount);
+      finalCurrency = booking.currency || finalCurrency;
+      finalPropertyId = booking.listing ? booking.listing.toString() : finalPropertyId;
+
+      if (amount != null && Math.abs(Number(amount) - finalAmount) > 0.01) {
+        return res.status(400).json({
+          success: false,
+          message: 'Amount mismatch with booking total'
+        });
+      }
+    } else if (serviceId) {
+      // Customer booking a service — verify service exists but do NOT check ownership
+      // (the owner is the host, not the customer making the booking)
+      const service = await Service.findById(serviceId);
+      if (!service) {
+        return res.status(404).json({
+          success: false,
+          message: 'Service not found'
+        });
+      }
+      // Prevent the service owner from booking their own service
+      if (service.user && service.user.toString() === req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'You cannot book your own service'
+        });
+      }
+      // Amount is computed on the frontend (basePrice + extraGuests + platformFee).
+      // We trust it here; the booking controller will re-validate against service pricing.
+      if (amount == null || Number(amount) <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'A valid amount is required to create a service order'
+        });
+      }
+      finalAmount = Number(amount);
+      finalCurrency = currency;
+    }
+    
+    else {
+      // Without bookingId, require backend-issued secure pricing token/context.
+      if (!pricingToken || !pricingContext) {
+        return res.status(400).json({
+          success: false,
+          message: 'Secure pricing context is required to create order'
+        });
+      }
+
+      const tokenPayload = {
+        propertyId: pricingContext.propertyId,
+        checkIn: pricingContext.checkIn,
+        checkOut: pricingContext.checkOut,
+        guests: pricingContext.guests,
+        nights: pricingContext.nights,
+        totalAmount: pricingContext.totalAmount
+      };
+
+      let isTokenValid = false;
+      try {
+        isTokenValid = verifyPricingToken(tokenPayload, pricingToken);
+      } catch (error) {
+        isTokenValid = false;
+      }
+
+      if (!isTokenValid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid pricing token'
+        });
+      }
+
+      finalAmount = Number(pricingContext.totalAmount);
+      finalCurrency = pricingContext.currency || finalCurrency;
+      finalPropertyId = pricingContext.propertyId || finalPropertyId;
+
+      if (propertyId && finalPropertyId && propertyId.toString() !== finalPropertyId.toString()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Property mismatch in pricing context'
+        });
+      }
+
+      if (amount != null && Math.abs(Number(amount) - finalAmount) > 0.01) {
+        return res.status(400).json({
+          success: false,
+          message: 'Amount mismatch with secure pricing context'
+        });
+      }
+    }
+
+    if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid amount for order creation'
+      });
+    }
+
+    // Verify Razorpay is initialized, try to initialize if not
+    if (!razorpayService.isInitialized()) {
+      logger.error('Razorpay not initialized');
+      return res.status(500).json({
+        success: false,
+        message: 'Payment gateway not configured. Please contact support.',
+        error: 'Razorpay service not initialized. Please check server logs.'
+      });
+    }
+
+    // Razorpay receipt ID must be max 40 characters
+    const timestamp = Date.now().toString().slice(-10);
+    const shortId = (finalPropertyId || bookingId || 'temp').toString().slice(-12);
+    const randomStr = Math.random().toString(36).substr(2, 6);
+    const receiptId = `RCP_${shortId}_${timestamp}_${randomStr}`.substring(0, 40);
+
+    logger.info('Creating Razorpay order', { amount: finalAmount, currency: finalCurrency, bookingId });
+
+    const order = await razorpayService.createOrder(finalAmount, finalCurrency, receiptId, {
+      bookingId: bookingId?.toString() || null,
+      propertyId: finalPropertyId?.toString() || null,
+      userId: req.user._id.toString(),
+      description: bookingId
+        ? `Payment for booking ${bookingId}`
+        : `Payment for property ${finalPropertyId || 'booking'}`
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        orderId: order.orderId,
+        amount: order.amount / 100,
+        currency: order.currency,
+        key: process.env.RAZORPAY_KEY_ID,
+        receipt: order.receipt
+      }
+    });
+  } catch (error) {
+    logger.error('Error creating Razorpay order', { 
+      error: error.message,
+      stack: error.stack,
+      errorObj: error.error,
+      statusCode: error.statusCode
+    });
+
+    if (error.message && error.message.includes('Razorpay not initialized')) {
+      return res.status(500).json({
+        success: false,
+        message: 'Payment gateway not configured. Please contact support.',
+        error: 'Razorpay credentials missing'
+      });
+    }
+
+    // Handle Razorpay API errors
+    if (error.error && typeof error.error === 'object') {
+      return res.status(error.statusCode || 400).json({
+        success: false,
+        message: error.error.description || 'Failed to create payment order',
+        error: error.error.reason || error.error.code || error.message
+      });
+    }
+
+    // Handle amount validation errors
+    if (error.message && error.message.includes('Amount too low')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        error: 'INVALID_AMOUNT'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error creating payment order',
+      error: error.message || 'Unknown error occurred'
+    });
+  }
+};
+
+// @desc    Razorpay webhook handler
+// @route   POST /api/payments/webhook/razorpay
+// @access  Public
+const razorpayWebhook = async (req, res) => {
+  try {
+    const signature = req.get('X-Razorpay-Signature');
+    const payload = req.rawBody || (Buffer.isBuffer(req.body) ? req.body.toString('utf8') : JSON.stringify(req.body));
+    const parsedBody = Buffer.isBuffer(req.body) ? JSON.parse(payload) : req.body;
+
+    // Verify webhook signature
+    const isValidSignature = razorpayService.verifyWebhookSignature(payload, signature);
+    
+    if (!isValidSignature) {
+      logger.warn('Invalid Razorpay webhook signature');
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid webhook signature'
+      });
+    }
+
+    logger.info('Razorpay webhook received', { event: parsedBody.event, ip: req.ip });
+
+    const event = parsedBody.event;
+    const paymentEntity = parsedBody.payload?.payment?.entity || parsedBody.payload?.payment;
+    const orderEntity = parsedBody.payload?.order?.entity || parsedBody.payload?.order;
+    const refundEntity = parsedBody.payload?.refund?.entity || parsedBody.payload?.refund;
+    const disputeEntity = parsedBody.payload?.dispute?.entity || parsedBody.payload?.dispute;
+
+    // Handle different webhook events
+    switch (event) {
+      case 'payment.authorized':
+        await handleRazorpayPaymentAuthorized(paymentEntity);
+        break;
+
+      case 'payment.captured':
+        await handleRazorpayPaymentSuccess(paymentEntity);
+        break;
+      
+      case 'payment.failed':
+        await handleRazorpayPaymentFailure(paymentEntity);
+        break;
+
+      case 'payment.dispute.created':
+        await handleRazorpayPaymentDisputeCreated(disputeEntity || paymentEntity);
+        break;
+
+      case 'order.paid':
+        await handleRazorpayOrderPaid(orderEntity);
+        break;
+      
+      case 'refund.created':
+        await handleRazorpayRefundCreated(refundEntity);
+        break;
+      
+      case 'refund.processed':
+        await handleRazorpayRefundProcessed(refundEntity);
+        break;
+
+      case 'refund.failed':
+        await handleRazorpayRefundFailed(refundEntity);
+        break;
+      
+      default:
+        logger.debug('Unhandled Razorpay webhook event', { event });
+    }
+
+    res.status(200).json({ received: true });
+  } catch (error) {
+    logger.error('Razorpay webhook processing error', { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Error processing webhook',
+      error: error.message
+    });
+  }
+};
+
+// Handle successful Razorpay payment (payment.captured webhook)
+const handleRazorpayPaymentSuccess = async (paymentEntity) => {
+  try {
+    if (!paymentEntity?.id) {
+      logger.warn('payment.captured webhook missing payment ID');
+      return;
+    }
+
+    const payment = await Payment.findOne({ razorpayPaymentId: paymentEntity.id });
+
+    if (!payment) {
+      logger.warn('Payment not found for Razorpay payment ID', { rzpPaymentId: paymentEntity.id });
+      return;
+    }
+
+    // Idempotency: don't re-process already completed payments
+    if (payment.status === 'completed') {
+      logger.debug('Payment already completed, skipping', { paymentId: payment._id });
+      return;
+    }
+
+    payment.status = 'completed';
+    payment.webhookStatus = 'captured';
+    payment.webhookReceivedAt = new Date();
+    payment.orderStatus = 'paid';
+    payment.processedAt = new Date();
+    payment.paymentDetails = payment.paymentDetails || {};
+    payment.paymentDetails.gatewayResponse = paymentEntity;
+    await payment.save();
+
+    // Confirm the booking
+    const booking = await Booking.findById(payment.booking);
+    if (booking) {
+      if (booking.paymentStatus !== 'paid') {
+        booking.paymentStatus = 'paid';
+        booking.status = 'confirmed';
+        await booking.save();
+        logger.info('Booking confirmed via payment.captured webhook', { bookingId: booking._id });
+
+        // Send confirmation email
+        try {
+          const { sendBookingConfirmationEmail } = require('../utils/sendEmail');
+          const populatedBooking = await Booking.findById(booking._id)
+            .populate('user', 'name email')
+            .populate('listing', 'title location images')
+            .populate('service', 'title');
+          if (populatedBooking?.user?.email) {
+            await sendBookingConfirmationEmail(populatedBooking.user.email, populatedBooking);
+          }
+        } catch (emailErr) {
+          logger.warn('Failed to send confirmation email from webhook', { error: emailErr.message });
+        }
+      }
+    } else {
+      logger.warn('Booking not found for captured payment', { bookingId: payment.booking, paymentId: payment._id });
+    }
+
+    logger.info('Razorpay payment.captured handled', { paymentId: payment._id });
+  } catch (error) {
+    logger.error('Error handling Razorpay payment.captured', { error: error.message });
+  }
+};
+
+// Handle Razorpay payment authorized (awaiting capture — e.g. UPI/NetBanking)
+const handleRazorpayPaymentAuthorized = async (paymentEntity) => {
+  try {
+    if (!paymentEntity?.id) {
+      logger.warn('Razorpay payment authorized webhook missing payment ID');
+      return;
+    }
+
+    const payment = await Payment.findOne({ razorpayPaymentId: paymentEntity.id });
+
+    if (payment) {
+      // 'authorized' means money is held but not yet captured (typical for UPI/NetBanking)
+      if (payment.status !== 'completed') {
+        payment.status = 'authorized';
+        payment.webhookStatus = 'authorized';
+        payment.webhookReceivedAt = new Date();
+        payment.paymentDetails = payment.paymentDetails || {};
+        payment.paymentDetails.gatewayResponse = paymentEntity;
+        await payment.save();
+      }
+
+      logger.info('Razorpay payment authorized, awaiting capture', { paymentId: payment._id });
+    } else {
+      logger.warn('Payment not found for authorized Razorpay payment', { rzpPaymentId: paymentEntity.id });
+    }
+  } catch (error) {
+    logger.error('Error handling Razorpay payment authorized', { error: error.message });
+  }
+};
+
+// Handle Razorpay payment dispute created
+const handleRazorpayPaymentDisputeCreated = async (disputeEntity) => {
+  try {
+    if (!disputeEntity) {
+      logger.warn('Razorpay dispute webhook missing dispute entity');
+      return;
+    }
+
+    const paymentId = disputeEntity.payment_id || disputeEntity.payment?.id || disputeEntity.paymentId;
+    if (!paymentId) {
+      logger.warn('Razorpay dispute webhook missing payment reference');
+      return;
+    }
+
+    const payment = await Payment.findOne({
+      razorpayPaymentId: paymentId
+    });
+
+    if (payment) {
+      payment.paymentDetails.gatewayResponse = {
+        ...(payment.paymentDetails?.gatewayResponse || {}),
+        dispute: disputeEntity
+      };
+      // Keep status within allowed enum; mark as processing until resolved
+      payment.status = payment.status === 'completed' ? 'processing' : payment.status;
+      await payment.save();
+
+      const booking = await Booking.findById(payment.booking);
+      if (booking) {
+        booking.paymentStatus = 'pending';
+        await booking.save();
+      }
+
+      logger.warn('Razorpay dispute created for payment', { paymentId: payment._id });
+    } else {
+      logger.warn('Payment not found for dispute', { rzpPaymentId: paymentId });
+    }
+  } catch (error) {
+    logger.error('Error handling Razorpay dispute created', { error: error.message });
+  }
+};
+
+// Handle Razorpay order paid (order-level confirmation)
+const handleRazorpayOrderPaid = async (orderEntity) => {
+  try {
+    if (!orderEntity?.id) {
+      logger.warn('Razorpay order.paid webhook missing order ID');
+      return;
+    }
+
+    const payment = await Payment.findOne({
+      razorpayOrderId: orderEntity.id
+    });
+
+    if (payment) {
+      payment.status = 'completed';
+      payment.paymentDetails.gatewayResponse = {
+        ...(payment.paymentDetails?.gatewayResponse || {}),
+        order: orderEntity
+      };
+      await payment.save();
+
+      const booking = await Booking.findById(payment.booking);
+      if (booking) {
+        booking.paymentStatus = 'paid';
+        booking.status = 'confirmed';
+        await booking.save();
+      }
+
+      logger.info('Razorpay order paid', { paymentId: payment._id });
+    } else {
+      logger.warn('Payment not found for Razorpay order', { rzpOrderId: orderEntity.id });
+    }
+  } catch (error) {
+    logger.error('Error handling Razorpay order paid', { error: error.message });
+  }
+};
+
+// Handle failed Razorpay payment — store full failure details
+const handleRazorpayPaymentFailure = async (paymentEntity) => {
+  try {
+    if (!paymentEntity?.id) {
+      logger.warn('payment.failed webhook missing payment ID');
+      return;
+    }
+
+    const payment = await Payment.findOne({ razorpayPaymentId: paymentEntity.id });
+
+    if (payment) {
+      payment.status = 'failed';
+      payment.webhookStatus = 'failed';
+      payment.webhookReceivedAt = new Date();
+      payment.paymentDetails = payment.paymentDetails || {};
+      payment.paymentDetails.gatewayResponse = paymentEntity;
+
+      // Store granular failure details from Razorpay
+      payment.failureDetails = {
+        error_code: paymentEntity.error_code,
+        error_description: paymentEntity.error_description,
+        error_source: paymentEntity.error_source,
+        error_step: paymentEntity.error_step,
+        error_reason: paymentEntity.error_reason,
+        error_metadata: paymentEntity.error_metadata,
+        timestamp: new Date(),
+      };
+      await payment.save();
+
+      // Cancel the associated booking
+      const booking = await Booking.findById(payment.booking);
+      if (booking && booking.status !== 'cancelled') {
+        booking.paymentStatus = 'failed';
+        booking.status = 'cancelled';
+        await booking.save();
+        logger.info('Booking cancelled due to payment failure', { bookingId: booking._id });
+      }
+
+      // Revert date availability
+      try {
+        const { updateAvailabilityStatus } = require('./availability.controller');
+        await updateAvailabilityStatus(payment.booking, 'available');
+      } catch (availabilityError) {
+        logger.error('Error reverting availability status', { error: availabilityError.message });
+      }
+
+      logger.warn('Razorpay payment.failed handled', { paymentId: payment._id, errorCode: paymentEntity.error_code });
+    } else {
+      logger.warn('Payment not found for failed Razorpay payment', { rzpPaymentId: paymentEntity.id });
+    }
+  } catch (error) {
+    logger.error('Error handling Razorpay payment.failed', { error: error.message });
+  }
+};
+
+// Handle Razorpay refund created
+const handleRazorpayRefundCreated = async (refundEntity) => {
+  try {
+    const refund = await Refund.findOne({
+      razorpayRefundId: refundEntity.id
+    });
+
+    if (refund) {
+      refund.status = 'processing';
+      refund.gatewayResponse = refundEntity;
+      await refund.save();
+
+      logger.info('Razorpay refund created', { refundId: refund._id });
+    }
+  } catch (error) {
+    logger.error('Error handling Razorpay refund created', { error: error.message });
+  }
+};
+
+// Handle Razorpay refund failed
+const handleRazorpayRefundFailed = async (refundEntity) => {
+  try {
+    if (!refundEntity?.id) {
+      logger.warn('Razorpay refund.failed webhook missing refund ID');
+      return;
+    }
+
+    const refund = await Refund.findOne({
+      razorpayRefundId: refundEntity.id
+    });
+
+    if (refund) {
+      refund.status = 'failed';
+      refund.gatewayResponse = refundEntity;
+      await refund.save();
+
+      const booking = await Booking.findById(refund.booking);
+      if (booking) {
+        booking.refundStatus = 'pending';
+        await booking.save();
+      }
+
+      logger.warn('Razorpay refund failed', { refundId: refund._id });
+    } else {
+      logger.warn('Refund record not found for Razorpay refund', { rzpRefundId: refundEntity.id });
+    }
+  } catch (error) {
+    logger.error('Error handling Razorpay refund failed', { error: error.message });
+  }
+};
+
+// Handle Razorpay refund processed
+const handleRazorpayRefundProcessed = async (refundEntity) => {
+  try {
+    logger.info('Razorpay refund.processed webhook', { rzpRefundId: refundEntity.id, rzpPaymentId: refundEntity.payment_id, amount: refundEntity.amount / 100 });
+    
+    const refund = await Refund.findOne({
+      razorpayRefundId: refundEntity.id
+    });
+
+    if (refund) {
+      refund.status = 'completed';
+      refund.processedAt = new Date();
+      refund.gatewayResponse = refundEntity;
+      await refund.save();
+
+
+      // Update booking refund status
+      const booking = await Booking.findById(refund.booking);
+      if (booking) {
+        booking.refunded = true;
+        booking.refundStatus = 'completed';
+        booking.paymentStatus = refund.amount === booking.totalAmount ? 'refunded' : 'partially_refunded';
+        await booking.save();
+        logger.info('Booking refund status updated', { bookingId: booking._id, paymentStatus: booking.paymentStatus });
+      }
+
+      // Update payment status
+      const payment = await Payment.findById(refund.payment);
+      if (payment) {
+        if (refund.amount === payment.amount) {
+          payment.status = 'refunded';
+        } else {
+          payment.status = 'partially_refunded';
+        }
+        await payment.save();
+        logger.info('Payment status updated after refund', { paymentId: payment._id, status: payment.status });
+      }
+
+      logger.info('Refund completed', { refundId: refund._id, amount: refund.amount });
+    } else {
+      logger.warn('Refund record not found for processed refund', { rzpRefundId: refundEntity.id });
+    }
+  } catch (error) {
+    logger.error('Error handling Razorpay refund processed', { error: error.message });
   }
 };
 
@@ -1191,7 +1879,7 @@ const updatePaymentStatus = async (req, res) => {
         const { updateAvailabilityStatus } = require('./availability.controller');
         await updateAvailabilityStatus(payment.booking, 'available');
       } catch (availabilityError) {
-        console.error('Error reverting availability status:', availabilityError);
+        logger.error('Error reverting availability status', { error: availabilityError.message });
         // Don't fail the status update if availability update fails
       }
     }
@@ -1209,56 +1897,87 @@ const updatePaymentStatus = async (req, res) => {
   }
 };
 
-// @desc    Handle payment failure and revert availability
+// @desc    Handle payment failure reported by frontend (user cancelled or Razorpay error)
 // @route   POST /api/payments/:paymentId/fail
 // @access  Private
 const handlePaymentFailure = async (req, res) => {
   try {
     const { paymentId } = req.params;
-    
-    const payment = await Payment.findById(paymentId);
+    const {
+      error_code,
+      error_description,
+      error_source,
+      error_step,
+      error_reason,
+      razorpayOrderId,
+      razorpayPaymentId,
+    } = req.body;
+
+    // Find by DB id OR by razorpay order id (whichever frontend has)
+    let payment = await Payment.findById(paymentId).catch(() => null);
+    if (!payment && razorpayOrderId) {
+      payment = await Payment.findOne({ razorpayOrderId });
+    }
+
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
-    if (payment.user.toString() !== req.user._id) {
+
+    if (payment.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
-    
-    // Mark payment as failed
+
+    // Idempotency: already failed
+    if (payment.status === 'failed') {
+      return res.status(200).json({ success: true, message: 'Payment already marked as failed' });
+    }
+
+    // Store failure details
     payment.status = 'failed';
+    payment.failureDetails = {
+      error_code: error_code || 'CANCELLED',
+      error_description: error_description || 'User cancelled or payment failed',
+      error_source: error_source || 'customer',
+      error_step: error_step || 'payment_authentication',
+      error_reason: error_reason || 'user_cancelled',
+      timestamp: new Date(),
+    };
+    if (razorpayPaymentId && !payment.razorpayPaymentId) {
+      payment.razorpayPaymentId = razorpayPaymentId;
+    }
     await payment.save();
-    
-    // Update booking status
+
+    // Cancel the associated booking
     if (payment.booking) {
       const booking = await Booking.findById(payment.booking);
-      if (booking) {
+      if (booking && booking.status !== 'cancelled') {
         booking.paymentStatus = 'failed';
         booking.status = 'cancelled';
         await booking.save();
+        logger.info('Booking cancelled due to frontend payment failure', { bookingId: booking._id });
       }
-    }
-    
-    // Revert availability to 'available'
-    if (payment.booking) {
+
+      // Revert date availability
       try {
         const { updateAvailabilityStatus } = require('./availability.controller');
         await updateAvailabilityStatus(payment.booking, 'available');
       } catch (availabilityError) {
-        console.error('Error reverting availability status:', availabilityError);
-        // Don't fail the payment failure handling if availability update fails
+        logger.error('Error reverting availability', { error: availabilityError.message });
       }
     }
-    
+
+    logger.warn('Payment marked as failed by frontend', { paymentId: payment._id, errorCode: error_code });
+
     res.status(200).json({
       success: true,
-      message: 'Payment failure handled successfully'
+      message: 'Payment failure recorded',
+      failureDetails: payment.failureDetails,
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: 'Error handling payment failure',
-      error: error.message
+      error: error.message,
     });
   }
 };
@@ -1279,8 +1998,10 @@ module.exports = {
   updatePaymentMethod,
   deletePaymentMethod,
   setDefaultPaymentMethod,
+  createRazorpayOrder,
   stripeWebhook,
   paypalWebhook,
+  razorpayWebhook,
   getPaymentStats,
   getMonthlyPaymentStats,
   getPaymentMethodStats,
@@ -1291,3 +2012,4 @@ module.exports = {
   updatePaymentStatus,
   handlePaymentFailure
 }; 
+
