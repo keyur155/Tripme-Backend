@@ -47,7 +47,7 @@ jobs:
             cd /var/www/tripme/Tripme-Backend-Beta
             git pull origin beta
             echo "--- Installing dependencies ---"
-            npm ci --omit=dev
+            npm install --omit=dev
             echo "--- Restarting beta server ---"
             if pm2 list | grep -q "backend-beta"; then
               pm2 reload backend-beta --update-env
