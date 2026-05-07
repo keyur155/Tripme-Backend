@@ -1,0 +1,34 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to Digital Ocean Droplet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+
+            echo "--- Pulling latest code ---"
+            cd /var/www/tripme/Tripme-Backend
+            git pull origin main
+
+            echo "--- Installing dependencies ---"
+            npm ci --omit=dev
+
+            echo "--- Restarting server ---"
+            pm2 reload backend --update-env
+            pm2 save
+
+            echo "--- Deploy complete ---"

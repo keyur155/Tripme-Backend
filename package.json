@@ -1,6 +1,6 @@
 {
   "name": "tripme-backend",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "TripMe - Airbnb-like accommodation booking platform backend API",
   "main": "server.js",
   "scripts": {
