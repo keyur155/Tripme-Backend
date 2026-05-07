@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DO_HOST }}
-          username: root
+          username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
             set -e
@@ -27,6 +27,9 @@ jobs:
             npm ci --omit=dev
             echo "--- Restarting server ---"
             pm2 reload backend --update-env
+            echo "--- Health check ---"
+            sleep 3
+            curl -sf http://localhost:5000/api/health || (echo "Health check failed!" && pm2 logs backend --lines 20 && exit 1)
             pm2 save
             echo "--- Production deploy complete ---"
 
@@ -36,10 +39,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DO_HOST }}
-          username: root
+          username: ${{ secrets.DO_USER }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
             set -e
@@ -47,7 +50,7 @@ jobs:
             cd /var/www/tripme/Tripme-Backend-Beta
             git pull origin beta
             echo "--- Installing dependencies ---"
-            npm install --omit=dev
+            npm ci --omit=dev
             echo "--- Restarting beta server ---"
             if pm2 list | grep -q "backend-beta"; then
               pm2 reload backend-beta --update-env

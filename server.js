@@ -53,8 +53,14 @@ const corsOptions = {
       allowedOrigins.push(...additional);
     }
 
-    // Allow requests with no origin (mobile apps, Postman, curl)
-    if (!origin) return callback(null, true);
+    // In production, reject requests with no origin except for webhooks/health checks
+    // (those are handled by separate routes that don't go through CORS)
+    if (!origin) {
+      if (config.nodeEnv === 'production') {
+        return callback(null, false);
+      }
+      return callback(null, true);
+    }
 
     const normalizedOrigin = normalizeOrigin(origin);
     const isAllowed = allowedOrigins.some(allowed => {
@@ -79,7 +85,7 @@ app.use(cors(corsOptions));
 
 // ── Body parsing ───────────────────────────────────────────
 app.use(express.json({
-  limit: config.maxRequestSize,
+  limit: '1mb',
   verify: (req, res, buf) => {
     // Preserve raw body for webhook signature verification
     if (req.originalUrl && req.originalUrl.startsWith('/api/payments/webhook/')) {
@@ -87,7 +93,15 @@ app.use(express.json({
     }
   }
 }));
-app.use(express.urlencoded({ extended: true, limit: config.maxRequestSize }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// ── NoSQL Injection Sanitization ──────────────────────────
+const { mongoSanitize } = require('./middlewares/sanitize.middleware');
+app.use(mongoSanitize);
+
+// ── Pagination Enforcement ────────────────────────────────
+const { enforcePagination } = require('./middlewares/pagination.middleware');
+app.use(enforcePagination);
 
 // ── Rate limiting ──────────────────────────────────────────
 const rateLimiters = createRateLimiters();
@@ -101,27 +115,15 @@ app.use(requestLogger);
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
-    message: 'TripMe Backend API is running',
-    timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version || '1.0.0',
-    endpoints: { health: '/api/health', api: '/api' }
+    message: 'TripMe Backend API'
   });
 });
 
 app.get('/api/health', (req, res) => {
-  const mem = process.memoryUsage();
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: config.env,
-    version: process.env.npm_package_version || '1.0.0',
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    memory: {
-      used: Math.round(mem.heapUsed / 1024 / 1024) + ' MB',
-      total: Math.round(mem.heapTotal / 1024 / 1024) + ' MB',
-      rss: Math.round(mem.rss / 1024 / 1024) + ' MB'
-    }
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
 });
 

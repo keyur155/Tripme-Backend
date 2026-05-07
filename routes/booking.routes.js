@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bookingController = require('../controllers/booking.controller');
-const { auth } = require('../middlewares/auth.middleware');
+const { auth, adminOnly } = require('../middlewares/auth.middleware');
 const { validateBooking } = require('../validations/booking.validation');
 const AuthorizationMiddleware = require('../middlewares/authorization.middleware');
 const { bookingRateLimit } = require('../middlewares/rateLimit.middleware');
@@ -156,28 +156,33 @@ router.get('/:id/refund',
   bookingController.getBookingRefund
 );
 
-// Admin refund management routes
+// Admin refund management routes (admin only)
 router.get('/admin/refunds/pending', 
+  adminOnly,
   securityMiddleware.auditLog('view_pending_refunds'),
   bookingController.getPendingRefunds
 );
 
 router.put('/admin/refunds/:id/approve', 
+  adminOnly,
   securityMiddleware.auditLog('approve_refund'),
   bookingController.approveRefund
 );
 
 router.put('/admin/refunds/:id/reject', 
+  adminOnly,
   securityMiddleware.auditLog('reject_refund'),
   bookingController.rejectRefund
 );
 
 router.put('/admin/refunds/:id/processing', 
+  adminOnly,
   securityMiddleware.auditLog('mark_refund_processing'),
   bookingController.markRefundAsProcessing
 );
 
 router.put('/admin/refunds/:id/complete', 
+  adminOnly,
   securityMiddleware.auditLog('mark_refund_completed'),
   bookingController.markRefundAsCompleted
 );

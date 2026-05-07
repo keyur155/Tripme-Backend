@@ -12,7 +12,15 @@ const connectDB = async () => {
       uri: mongoURI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@'),
     });
 
-    await mongoose.connect(mongoURI);
+    await mongoose.connect(mongoURI, {
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      maxPoolSize: 50,
+      minPoolSize: 5,
+    });
+
+    // Set global query timeout to prevent runaway queries
+    mongoose.set('maxTimeMS', 30000);
 
     logger.info('MongoDB connected successfully');
 

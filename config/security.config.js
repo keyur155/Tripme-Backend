@@ -8,7 +8,7 @@ const securityConfig = {
     // General admin API rate limit
     adminAPI: {
       windowMs: 15 * 60 * 1000, // 15 minutes
-      max: 1000, // limit each IP to 1000 requests per windowMs (increased for development)
+      max: 200,
       message: {
         success: false,
         message: 'Too many requests from this IP, please try again later.'
@@ -32,7 +32,7 @@ const securityConfig = {
     // Login rate limit
     login: {
       windowMs: 15 * 60 * 1000, // 15 minutes
-      max: 50, // limit each IP to 50 login attempts per windowMs (increased for development)
+      max: 10, // limit each IP to 10 auth attempts per window
       message: {
         success: false,
         message: 'Too many login attempts, please try again later.'

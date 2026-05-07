@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Admin = require('../models/Admin');
+const Session = require('../models/Session');
 const { logger } = require('../config/logger');
 
 const auth = async (req, res, next) => {
@@ -15,6 +16,24 @@ const auth = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Validate session exists and hasn't been revoked
+    const session = await Session.findOne({ 
+      user: decoded.id, 
+      token,
+      expiresAt: { $gt: new Date() }
+    });
+
+    if (!session) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session expired or revoked. Please log in again.'
+      });
+    }
+
+    // Update last activity
+    session.lastActivity = new Date();
+    await session.save();
     
     // Check if it's an admin token
     if (decoded.role === 'admin') {
@@ -37,7 +56,6 @@ const auth = async (req, res, next) => {
       req.user = admin;
       req.isAdmin = true;
     } else {
-      // Regular user authentication
       const user = await User.findById(decoded.id).select('-password');
 
       if (!user) {
@@ -54,12 +72,11 @@ const auth = async (req, res, next) => {
         });
       }
 
-
-
       req.user = user;
       req.isAdmin = false;
     }
 
+    req.session = session;
     next();
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
