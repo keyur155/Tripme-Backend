@@ -318,6 +318,43 @@ const getListings = async (req, res) => {
       query.amenities = { $all: amenities.split(',') };
     }
 
+    // Filter by place type (entire, room, private, shared)
+    const placeType = req.query.placeType;
+    if (placeType && placeType !== 'any') {
+      query.placeType = placeType;
+    }
+
+    // Filter by features
+    const features = req.query.features;
+    if (features) {
+      query.features = { $all: features.split(',') };
+    }
+
+    // Filter by style
+    const style = req.query.style;
+    if (style) {
+      query.style = { $in: style.split(',') };
+    }
+
+    // Filter by bedrooms/beds/bathrooms
+    const bedroomsFilter = req.query.bedrooms;
+    const bedsFilter = req.query.beds;
+    const bathroomsFilter = req.query.bathrooms;
+    if (bedroomsFilter) query.bedrooms = { $gte: Number(bedroomsFilter) };
+    if (bedsFilter) query.beds = { $gte: Number(bedsFilter) };
+    if (bathroomsFilter) query.bathrooms = { $gte: Number(bathroomsFilter) };
+
+    // Filter by instant book
+    if (req.query.instantBook === 'true') {
+      query.instantBookable = true;
+    }
+
+    // Filter by cancellation policy
+    const cancellation = req.query.cancellationPolicy;
+    if (cancellation) {
+      query.cancellationPolicy = cancellation;
+    }
+
     // 🗺️ GOOGLE MAPS GEOSPATIAL SEARCH - Priority System
     // Parse Google Maps coordinates from query params
     const lng = req.query.lng ? Number(req.query.lng) : null;
