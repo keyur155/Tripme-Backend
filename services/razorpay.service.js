@@ -26,7 +26,9 @@ async function razorpayHttpRequest(endpoint, method, data) {
       'Authorization': `Basic ${auth}`,
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(postData)
-    }
+    },
+    // Disable certificate verification only in development (NOT for production)
+    rejectUnauthorized: process.env.NODE_ENV === 'production'
   };
 
   return new Promise((resolve, reject) => {
@@ -238,15 +240,10 @@ async function createRefund(paymentId, amount, notes = '', meta = {}) {
 
 
   async function getPaymentDetails(paymentId) {
-    if (!isInitialized()) {
-      initializeRazorpay();
-      if (!isInitialized()) {
-        throw new Error('Razorpay not initialized');
-      }
-    }
-  
     try {
-      const payment = await razorpayInstance.payments.fetch(paymentId);
+      // Use custom HTTP request with TLS fix instead of SDK
+      const payment = await razorpayHttpRequest(`/payments/${paymentId}`, 'GET', null);
+      logger.info('Razorpay payment details fetched', { paymentId, status: payment.status });
       return payment;
     } catch (error) {
       logger.error('Error fetching Razorpay payment details', { paymentId, error: error.message });

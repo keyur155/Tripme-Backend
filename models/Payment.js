@@ -4,27 +4,27 @@ const paymentSchema = new mongoose.Schema({
   booking: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Booking',
-    required: true
+    required: false // Allow null for orphan webhook records
   },
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: false // Allow null for orphan webhook records
   },
   host: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: false // Allow null for orphan webhook records
   },
   amount: {
     type: Number,
-    required: true,
-    min: [0.01, 'Payment amount must be greater than 0']
+    required: false, // Allow null for orphan webhook records
+    min: [0, 'Payment amount must be non-negative']
   },
   paymentMethod: {
     type: String,
-    enum: ['credit_card', 'debit_card', 'paypal', 'bank_transfer', 'wallet', 'upi', 'net_banking'],
-    required: true
+    enum: ['credit_card', 'debit_card', 'paypal', 'bank_transfer', 'wallet', 'upi', 'net_banking', 'unknown'],
+    default: 'unknown'
   },
   paymentDetails: {
     cardLast4: String,
@@ -71,11 +71,41 @@ const paymentSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Recovery tracking
+  recoveryStatus: {
+    type: String,
+    enum: ['none', 'recovery_required', 'recovery_in_progress', 'recovered', 'recovery_failed'],
+    default: 'none'
+  },
+  recoveryAttempts: {
+    type: Number,
+    default: 0
+  },
+  recoveredAt: Date,
+  // Processed webhook event IDs for idempotency
+  processedWebhookEvents: [{
+    eventId: String,
+    event: String,
+    processedAt: { type: Date, default: Date.now }
+  }],
+  // Full payment timeline logs — append-only, never overwrite
+  timeline: [{
+    event: { type: String, required: true },
+    message: { type: String, required: true },
+    timestamp: { type: Date, default: Date.now },
+    source: {
+      type: String,
+      enum: ['system', 'webhook', 'frontend', 'reconciliation', 'admin', 'recovery'],
+      default: 'system'
+    },
+    data: mongoose.Schema.Types.Mixed
+  }],
   
   // Fee breakdown
   subtotal: {
     type: Number,
-    required: true,
+    required: false, // Allow null for orphan webhook records
+    default: 0,
     min: [0, 'Subtotal must be non-negative']
   },
   taxes: {
@@ -233,10 +263,19 @@ const paymentSchema = new mongoose.Schema({
     userAgent: String,
     source: {
       type: String,
-      enum: ['web', 'mobile_app', 'api'],
+      enum: ['web', 'mobile_app', 'api', 'webhook_orphan', 'webhook' , 'create_order'],
       default: 'web'
-    }
-  }
+    },
+    idempotencyKey: String,
+    sessionId: String,
+    requestId: String,
+    bookingType: String,
+    propertyId: mongoose.Schema.Types.ObjectId,
+    serviceId: mongoose.Schema.Types.ObjectId,
+    securityVersion: String
+  },
+  // Raw webhook payload storage for orphan records
+  rawWebhookPayload: mongoose.Schema.Types.Mixed
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -267,15 +306,25 @@ paymentSchema.virtual('payoutAmount').get(function() {
 
 // Pre-save hook to calculate totals
 paymentSchema.pre('save', function(next) {
-  // Ensure total amount equals subtotal + all fees - discount
-  if (this.isModified('subtotal') || this.isModified('taxes') || this.isModified('serviceFee') || 
-      this.isModified('cleaningFee') || this.isModified('securityDeposit') || 
-      this.isModified('processingFee') || this.isModified('discountAmount')) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NEW BUSINESS MODEL:
+  // - Platform earns ONLY processingFee (platformFee is DEPRECATED = 0)
+  // - Host receives FULL subtotal (hostEarning = subtotal)
+  // - Customer pays: subtotal + GST + processingFee
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  const amountExplicitlySet = this.isModified('amount') && this.amount > 0;
+  
+  // Only auto-calculate amount if:
+  // 1. Amount was NOT explicitly set, AND
+  // 2. One of the component fields changed
+  if (!amountExplicitlySet && 
+      (this.isModified('subtotal') || this.isModified('taxes') || this.isModified('serviceFee') || 
+       this.isModified('cleaningFee') || this.isModified('securityDeposit') || 
+       this.isModified('processingFee') || this.isModified('discountAmount'))) {
     
-    // Calculate total amount correctly (subtotal already includes base amount + fees)
-    // Total = subtotal + platform fee + GST + processing fee
+    // NEW FORMULA: Total = subtotal + GST + processingFee (NO platformFee)
     this.amount = this.subtotal + 
-                  (this.commission?.platformFee || 0) + 
                   this.taxes + 
                   this.processingFee - 
                   (this.discountAmount || 0);
@@ -284,28 +333,22 @@ paymentSchema.pre('save', function(next) {
     this.amount = Math.max(0, this.amount);
   }
   
-  // Calculate commission if not set - USE DYNAMIC RATE FROM PRICING BREAKDOWN
-  if (!this.commission.platformFee && this.subtotal > 0) {
-    // Try to get platform fee rate from pricing breakdown first
-    let platformFeeRate = 0.15; // Fallback rate
-    
-    if (this.pricingBreakdown?.customerBreakdown?.platformFee && this.subtotal > 0) {
-      // Calculate rate from stored breakdown
-      platformFeeRate = this.pricingBreakdown.customerBreakdown.platformFee / this.subtotal;
-      // Rate derived from pricing breakdown
-    } else {
-      // No pricing breakdown found, using fallback platform fee rate: 15%
-    }
-    
-    this.commission.platformFee = Math.round(this.subtotal * platformFeeRate * 100) / 100;
-    this.commission.hostEarning = Math.round((this.subtotal - this.commission.platformFee) * 100) / 100;
-    
-    // Recalculate amount with correct platform fee
-    this.amount = this.subtotal + 
-                  this.commission.platformFee + 
-                  this.taxes + 
-                  this.processingFee - 
-                  (this.discountAmount || 0);
+  // Set commission structure according to new business model
+  // Only set if not already explicitly set
+  if (this.subtotal > 0 && !this.commission?.hostEarning) {
+    // NEW BUSINESS MODEL:
+    // - platformFee = 0 (DEPRECATED)
+    // - hostEarning = FULL subtotal (no deduction)
+    // - processingFee = platform's only revenue
+    this.commission = this.commission || {};
+    this.commission.platformFee = 0; // DEPRECATED: No longer charged
+    this.commission.hostEarning = this.subtotal; // Host receives FULL subtotal
+    this.commission.processingFee = this.processingFee || 0;
+  }
+  
+  // Ensure payout.amount matches subtotal (host receives full subtotal)
+  if (this.payout && this.subtotal > 0 && !this.payout.amount) {
+    this.payout.amount = this.subtotal;
   }
   
   next();
@@ -320,7 +363,50 @@ paymentSchema.index({ 'payout.status': 1 });
 paymentSchema.index({ createdAt: -1 });
 paymentSchema.index({ transactionId: 1 });
 paymentSchema.index({ 'payout.scheduledDate': 1 });
-paymentSchema.index({ razorpayOrderId: 1 });
-paymentSchema.index({ razorpayPaymentId: 1 });
+// CRITICAL: Unique indexes to prevent duplicate payment documents
+// sparse: true allows multiple null values (for payments without Razorpay IDs)
+paymentSchema.index({ razorpayOrderId: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ razorpayPaymentId: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ status: 1, createdAt: -1 }); // Reconciliation queries
+paymentSchema.index({ recoveryStatus: 1 }); // Recovery queries
+paymentSchema.index({ 'metadata.source': 1 }); // Orphan tracking
+paymentSchema.index({ 'processedWebhookEvents.eventId': 1 }); // Webhook dedup
+
+// Static method: add timeline entry without overwriting history
+paymentSchema.statics.addTimelineEntry = async function(paymentId, entry) {
+  return this.findByIdAndUpdate(paymentId, {
+    $push: {
+      timeline: {
+        event: entry.event,
+        message: entry.message,
+        timestamp: entry.timestamp || new Date(),
+        source: entry.source || 'system',
+        data: entry.data || {}
+      }
+    }
+  }, { new: true });
+};
+
+// Static method: check if webhook event already processed
+paymentSchema.statics.isWebhookProcessed = async function(paymentId, eventId) {
+  const payment = await this.findOne({
+    _id: paymentId,
+    'processedWebhookEvents.eventId': eventId
+  });
+  return !!payment;
+};
+
+// Static method: mark webhook event as processed
+paymentSchema.statics.markWebhookProcessed = async function(paymentId, eventId, eventType) {
+  return this.findByIdAndUpdate(paymentId, {
+    $push: {
+      processedWebhookEvents: {
+        eventId,
+        event: eventType,
+        processedAt: new Date()
+      }
+    }
+  });
+};
 
 module.exports = mongoose.model('Payment', paymentSchema);

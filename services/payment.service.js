@@ -162,17 +162,42 @@ class PaymentService {
       const invoiceId = `INV_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const receiptId = `RCP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      // Create payment record with comprehensive data
-      const payment = await Payment.create({
-        booking: bookingId,
-        user: user._id,
-        host: booking.host._id,
-        amount: booking.totalAmount, // Use the booking's total amount as the single source of truth
-        currency: booking.currency || 'INR',
-        paymentMethod: paymentData.paymentMethod || 'credit_card',
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: Find and UPDATE existing canonical payment document.
+      // Payment document should already exist from createRazorpayOrder.
+      // We MUST NOT create a new payment here — only update the existing one.
+      // ═══════════════════════════════════════════════════════════════════════════
+      
+      let payment = null;
+      
+      // Try to find existing payment by razorpayOrderId or razorpayPaymentId
+      if (paymentData.razorpayOrderId || paymentData.razorpayPaymentId) {
+        payment = await Payment.findOne({
+          $or: [
+            ...(paymentData.razorpayPaymentId ? [{ razorpayPaymentId: paymentData.razorpayPaymentId }] : []),
+            ...(paymentData.razorpayOrderId ? [{ razorpayOrderId: paymentData.razorpayOrderId }] : [])
+          ]
+        });
+      }
+      
+      // Fallback: find by booking if no Razorpay IDs
+      if (!payment && bookingId) {
+        payment = await Payment.findOne({ booking: bookingId, status: { $in: ['pending', 'created'] } });
+      }
+
+      if (payment) {
+        // UPDATE existing payment document
+        console.log('📝 Updating existing canonical payment document:', payment._id);
         
-        // Payment details with transaction information
-        paymentDetails: {
+        payment.booking = bookingId;
+        payment.user = user._id;
+        payment.host = booking.host._id;
+        payment.amount = booking.totalAmount;
+        payment.currency = booking.currency || 'INR';
+        payment.paymentMethod = paymentData.paymentMethod || 'credit_card';
+        
+        // Payment details
+        payment.paymentDetails = {
           transactionId: transactionId,
           paymentGateway: paymentData.gateway || 'razorpay',
           gatewayResponse: paymentData.gatewayResponse || {
@@ -181,59 +206,55 @@ class PaymentService {
             processedAt: new Date().toISOString(),
             gateway: paymentData.gateway || 'razorpay'
           }
-        },
+        };
+        
         // Razorpay specific fields
-        razorpayOrderId: paymentData.razorpayOrderId || null,
-        razorpayPaymentId: paymentData.razorpayPaymentId || null,
-        razorpaySignature: paymentData.razorpaySignature || null,
+        payment.razorpayPaymentId = paymentData.razorpayPaymentId || payment.razorpayPaymentId;
+        payment.razorpaySignature = paymentData.razorpaySignature || payment.razorpaySignature;
         
         // Fee breakdown
-        subtotal: feeBreakdown.subtotal,
-        taxes: feeBreakdown.taxes,
-        gst: feeBreakdown.taxes, // GST is the same as taxes
-        serviceFee: backendPricing.serviceFee,
-        cleaningFee: feeBreakdown.cleaningFee,
-        securityDeposit: feeBreakdown.securityDeposit,
-        processingFee: feeBreakdown.processingFee,
-        discountAmount: booking.discountAmount || 0,
+        payment.subtotal = feeBreakdown.subtotal;
+        payment.taxes = feeBreakdown.taxes;
+        payment.gst = feeBreakdown.taxes;
+        payment.serviceFee = backendPricing.serviceFee;
+        payment.cleaningFee = feeBreakdown.cleaningFee;
+        payment.securityDeposit = feeBreakdown.securityDeposit;
+        payment.processingFee = feeBreakdown.processingFee;
+        payment.discountAmount = booking.discountAmount || 0;
         
         // Commission structure
-        commission: {
+        payment.commission = {
           platformFee: feeBreakdown.platformFee,
           hostEarning: feeBreakdown.hostEarning,
           processingFee: feeBreakdown.processingFee
-        },
+        };
         
-        // Complete pricing breakdown for audit trail
-        pricingBreakdown: backendPricing.breakdown,
+        // Pricing breakdown
+        payment.pricingBreakdown = backendPricing.breakdown;
         
-        // Payout tracking initialization
-        payout: {
+        // Payout tracking
+        payment.payout = {
           status: 'pending',
           scheduledDate: booking.bookingType === 'property' && booking.checkIn ? 
-            new Date(new Date(booking.checkIn).getTime() + 24 * 60 * 60 * 1000) : // 24 hours after check-in
-            new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now for services
+            new Date(new Date(booking.checkIn).getTime() + 24 * 60 * 60 * 1000) :
+            new Date(Date.now() + 24 * 60 * 60 * 1000),
           amount: feeBreakdown.hostEarning,
           method: 'bank_transfer',
           reference: `PAYOUT_${Date.now()}`,
           notes: `Payout for booking ${booking.receiptId || booking._id}`
-        },
+        };
         
-        // Invoice and receipt information
-        invoiceId: invoiceId,
-        receiptUrl: `/receipts/${receiptId}`, // TODO: Generate actual receipt URL
+        // Invoice and receipt
+        payment.invoiceId = invoiceId;
+        payment.receiptUrl = `/receipts/${receiptId}`;
+        payment.coupon = booking.couponApplied || null;
+        payment.status = 'processing';
         
-        // Coupon information if applied
-        coupon: booking.couponApplied || null,
-        
-        // Status and processing
-        status: 'processing', // Will be updated after verification
-        
-        // Security and audit metadata
-        metadata: {
+        // Update metadata (preserve source, add new fields)
+        payment.metadata = {
+          ...payment.metadata,
           ipAddress: paymentData.ipAddress,
           userAgent: paymentData.userAgent,
-          source: paymentData.source || 'web',
           idempotencyKey: paymentData.idempotencyKey,
           sessionId: paymentData.sessionId,
           requestId: paymentData.requestId,
@@ -242,8 +263,93 @@ class PaymentService {
           serviceId: booking.service,
           timestamp: new Date().toISOString(),
           securityVersion: '1.0'
-        }
-      });
+        };
+        
+        await payment.save();
+        
+        // Add timeline entry for payment verification
+        await Payment.addTimelineEntry(payment._id, {
+          event: 'payment_verified',
+          message: 'Payment verified and details updated',
+          source: 'system',
+          data: { razorpayPaymentId: paymentData.razorpayPaymentId, transactionId }
+        });
+        
+      } else {
+        // FALLBACK: Create new payment only if no existing document found
+        // This should be rare — indicates createRazorpayOrder was bypassed
+        console.warn('⚠️ No existing payment found, creating new document (this should be rare)');
+        
+        payment = await Payment.create({
+          booking: bookingId,
+          user: user._id,
+          host: booking.host._id,
+          amount: booking.totalAmount,
+          currency: booking.currency || 'INR',
+          paymentMethod: paymentData.paymentMethod || 'credit_card',
+          paymentDetails: {
+            transactionId: transactionId,
+            paymentGateway: paymentData.gateway || 'razorpay',
+            gatewayResponse: paymentData.gatewayResponse || {
+              status: 'success',
+              transactionId: transactionId,
+              processedAt: new Date().toISOString(),
+              gateway: paymentData.gateway || 'razorpay'
+            }
+          },
+          razorpayOrderId: paymentData.razorpayOrderId || null,
+          razorpayPaymentId: paymentData.razorpayPaymentId || null,
+          razorpaySignature: paymentData.razorpaySignature || null,
+          subtotal: feeBreakdown.subtotal,
+          taxes: feeBreakdown.taxes,
+          gst: feeBreakdown.taxes,
+          serviceFee: backendPricing.serviceFee,
+          cleaningFee: feeBreakdown.cleaningFee,
+          securityDeposit: feeBreakdown.securityDeposit,
+          processingFee: feeBreakdown.processingFee,
+          discountAmount: booking.discountAmount || 0,
+          commission: {
+            platformFee: feeBreakdown.platformFee,
+            hostEarning: feeBreakdown.hostEarning,
+            processingFee: feeBreakdown.processingFee
+          },
+          pricingBreakdown: backendPricing.breakdown,
+          payout: {
+            status: 'pending',
+            scheduledDate: booking.bookingType === 'property' && booking.checkIn ? 
+              new Date(new Date(booking.checkIn).getTime() + 24 * 60 * 60 * 1000) :
+              new Date(Date.now() + 24 * 60 * 60 * 1000),
+            amount: feeBreakdown.hostEarning,
+            method: 'bank_transfer',
+            reference: `PAYOUT_${Date.now()}`,
+            notes: `Payout for booking ${booking.receiptId || booking._id}`
+          },
+          invoiceId: invoiceId,
+          receiptUrl: `/receipts/${receiptId}`,
+          coupon: booking.couponApplied || null,
+          status: 'processing',
+          metadata: {
+            ipAddress: paymentData.ipAddress,
+            userAgent: paymentData.userAgent,
+            source: paymentData.source || 'web',
+            idempotencyKey: paymentData.idempotencyKey,
+            sessionId: paymentData.sessionId,
+            requestId: paymentData.requestId,
+            bookingType: booking.bookingType,
+            propertyId: booking.listing,
+            serviceId: booking.service,
+            timestamp: new Date().toISOString(),
+            securityVersion: '1.0'
+          },
+          timeline: [{
+            event: 'payment_created_fallback',
+            message: 'Payment created during verification (no canonical document found)',
+            timestamp: new Date(),
+            source: 'system',
+            data: { razorpayOrderId: paymentData.razorpayOrderId, razorpayPaymentId: paymentData.razorpayPaymentId }
+          }]
+        });
+      }
 
       // Log successful payment calculation
       await PaymentAuditLog.logPaymentCalculation({

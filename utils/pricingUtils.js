@@ -99,23 +99,32 @@ async function calculate24HourPricing(params) {
   // Calculate total subtotal (including security deposit for customer payment)
   const totalSubtotal = hostSubtotal + securityDeposit;
   
-  // Calculate TripMe service fee (on host subtotal only, not security deposit)
-  const platformFee = toTwoDecimals(hostSubtotal * platformFeeRate);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NEW BUSINESS MODEL (24-hour pricing):
+  // - Platform earns ONLY processingFee
+  // - Host receives FULL subtotal (no platformFee deduction)
+  // - platformFee is set to 0 (deprecated, kept for backward compatibility)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // DEPRECATED: platformFee no longer charged - set to 0
+  const platformFee = 0;
   
   // Calculate GST (configurable, on total subtotal including security deposit)
   const gst = toTwoDecimals(totalSubtotal * gstRate);
   
   // Calculate processing fee (configurable rate + fixed on total subtotal)
+  // This is the ONLY fee the platform earns
   const processingFee = toTwoDecimals(totalSubtotal * processingFeeRate + processingFeeFixed);
   
   // Calculate total amount (what customer pays)
-  const totalAmount = toTwoDecimals(totalSubtotal + platformFee + gst + processingFee);
+  // Customer pays: subtotal + GST + processingFee (NO platformFee)
+  const totalAmount = toTwoDecimals(totalSubtotal + gst + processingFee);
   
-  // Calculate host earning (host subtotal minus TripMe service fee - security deposit is held separately)
-  const hostEarning = toTwoDecimals(hostSubtotal - platformFee);
+  // Host receives FULL subtotal (no deductions)
+  const hostEarning = toTwoDecimals(hostSubtotal);
   
-  // Calculate platform revenue (TripMe service fee + processing fee)
-  const platformRevenue = toTwoDecimals(platformFee + processingFee);
+  // Platform revenue = processingFee ONLY
+  const platformRevenue = toTwoDecimals(processingFee);
 
   return {
     // Base pricing
@@ -134,27 +143,27 @@ async function calculate24HourPricing(params) {
     hourlyExtension: toTwoDecimals(extensionCost),
     discountAmount: toTwoDecimals(discountAmount),
     
-    // Subtotal (before platform fee and taxes)
+    // Subtotal (before taxes)
     subtotal: toTwoDecimals(totalSubtotal),
     hostSubtotal: toTwoDecimals(hostSubtotal),
     
-    // TripMe service fees
-    platformFee: toTwoDecimals(platformFee),
+    // TripMe service fees (platformFee DEPRECATED)
+    platformFee: 0, // DEPRECATED: Platform no longer charges this
     processingFee: toTwoDecimals(processingFee),
-    platformRevenue: toTwoDecimals(platformRevenue),
+    platformRevenue: toTwoDecimals(processingFee), // Platform earns ONLY processingFee
     
     // Taxes
     gst: toTwoDecimals(gst),
     
     // Final amounts
     totalAmount: toTwoDecimals(totalAmount),
-    hostEarning: toTwoDecimals(hostEarning),
+    hostEarning: toTwoDecimals(hostSubtotal), // Host receives FULL subtotal
     
     // Currency
     currency,
     
     // Rate used for calculation
-    platformFeeRate,
+    platformFeeRate: 0, // DEPRECATED: No longer used
     gstRate,
     processingFeeRate,
     processingFeeFixed,
@@ -170,13 +179,13 @@ async function calculate24HourPricing(params) {
         hourlyExtension: toTwoDecimals(extensionCost),
         discountAmount: toTwoDecimals(discountAmount),
         subtotal: toTwoDecimals(totalSubtotal),
-        platformFee: toTwoDecimals(platformFee),
+        platformFee: 0, // DEPRECATED
         gst: toTwoDecimals(gst),
         processingFee: toTwoDecimals(processingFee),
         totalAmount: toTwoDecimals(totalAmount)
       },
       
-      // What host sees
+      // What host sees - HOST RECEIVES FULL SUBTOTAL
       hostBreakdown: {
         baseAmount: toTwoDecimals(baseAmount),
         cleaningFee: toTwoDecimals(cleaningFee),
@@ -185,16 +194,16 @@ async function calculate24HourPricing(params) {
         hourlyExtension: toTwoDecimals(extensionCost),
         discountAmount: toTwoDecimals(discountAmount),
         subtotal: toTwoDecimals(hostSubtotal),
-        platformFee: toTwoDecimals(platformFee),
-        hostEarning: toTwoDecimals(hostEarning)
+        platformFee: 0, // DEPRECATED: No deduction from host
+        hostEarning: toTwoDecimals(hostSubtotal) // Host receives FULL subtotal
       },
       
-      // What TripMe sees
+      // What TripMe sees - PLATFORM EARNS ONLY processingFee
       platformBreakdown: {
-        platformFee: toTwoDecimals(platformFee),
+        platformFee: 0, // DEPRECATED
         processingFee: toTwoDecimals(processingFee),
         gst: toTwoDecimals(gst),
-        platformRevenue: toTwoDecimals(platformRevenue)
+        platformRevenue: toTwoDecimals(processingFee) // ONLY processingFee
       }
     }
   };
@@ -250,23 +259,32 @@ async function calculatePricingBreakdown(params) {
   // Calculate total subtotal (including security deposit for customer payment)
   const totalSubtotal = hostSubtotal + securityDeposit;
   
-  // Calculate TripMe service fee (on host subtotal only, not security deposit)
-  const platformFee = toTwoDecimals(hostSubtotal * platformFeeRate);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NEW BUSINESS MODEL (standard pricing):
+  // - Platform earns ONLY processingFee
+  // - Host receives FULL subtotal (no platformFee deduction)
+  // - platformFee is set to 0 (deprecated, kept for backward compatibility)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // DEPRECATED: platformFee no longer charged - set to 0
+  const platformFee = 0;
   
   // Calculate GST (configurable, on total subtotal including security deposit)
   const gst = toTwoDecimals(totalSubtotal * gstRate);
   
   // Calculate processing fee (configurable rate + fixed on total subtotal)
+  // This is the ONLY fee the platform earns
   const processingFee = toTwoDecimals(totalSubtotal * processingFeeRate + processingFeeFixed);
   
   // Calculate total amount (what customer pays)
-  const totalAmount = toTwoDecimals(totalSubtotal + platformFee + gst + processingFee);
+  // Customer pays: subtotal + GST + processingFee (NO platformFee)
+  const totalAmount = toTwoDecimals(totalSubtotal + gst + processingFee);
   
-  // Calculate host earning (host subtotal minus TripMe service fee - security deposit is held separately)
-  const hostEarning = toTwoDecimals(hostSubtotal - platformFee);
+  // Host receives FULL subtotal (no deductions)
+  const hostEarning = toTwoDecimals(hostSubtotal);
   
-  // Calculate platform revenue (TripMe service fee + processing fee)
-  const platformRevenue = toTwoDecimals(platformFee + processingFee);
+  // Platform revenue = processingFee ONLY
+  const platformRevenue = toTwoDecimals(processingFee);
 
   return {
     // Base pricing
@@ -285,27 +303,27 @@ async function calculatePricingBreakdown(params) {
     hourlyExtension: toTwoDecimals(extensionCost),
     discountAmount: toTwoDecimals(discountAmount),
     
-    // Subtotal (before platform fee and taxes)
+    // Subtotal (before taxes)
     subtotal: toTwoDecimals(totalSubtotal),
     hostSubtotal: toTwoDecimals(hostSubtotal),
     
-    // TripMe service fees
-    platformFee: toTwoDecimals(platformFee),
+    // TripMe service fees (platformFee DEPRECATED)
+    platformFee: 0, // DEPRECATED: Platform no longer charges this
     processingFee: toTwoDecimals(processingFee),
-    platformRevenue: toTwoDecimals(platformRevenue),
+    platformRevenue: toTwoDecimals(processingFee), // Platform earns ONLY processingFee
     
     // Taxes
     gst: toTwoDecimals(gst),
     
     // Final amounts
     totalAmount: toTwoDecimals(totalAmount),
-    hostEarning: toTwoDecimals(hostEarning),
+    hostEarning: toTwoDecimals(hostSubtotal), // Host receives FULL subtotal
     
     // Currency
     currency,
     
     // Rate used for calculation
-    platformFeeRate: platformFeeRate,
+    platformFeeRate: 0, // DEPRECATED: No longer used
     
     // Breakdown for display
     breakdown: {
@@ -318,13 +336,13 @@ async function calculatePricingBreakdown(params) {
         hourlyExtension: toTwoDecimals(extensionCost),
         discountAmount: toTwoDecimals(discountAmount),
         subtotal: toTwoDecimals(totalSubtotal),
-        platformFee: toTwoDecimals(platformFee),
+        platformFee: 0, // DEPRECATED
         gst: toTwoDecimals(gst),
         processingFee: toTwoDecimals(processingFee),
         totalAmount: toTwoDecimals(totalAmount)
       },
       
-      // What host sees
+      // What host sees - HOST RECEIVES FULL SUBTOTAL
       hostBreakdown: {
         baseAmount: toTwoDecimals(baseAmount),
         cleaningFee: toTwoDecimals(cleaningFee),
@@ -333,16 +351,16 @@ async function calculatePricingBreakdown(params) {
         hourlyExtension: toTwoDecimals(extensionCost),
         discountAmount: toTwoDecimals(discountAmount),
         subtotal: toTwoDecimals(hostSubtotal),
-        platformFee: toTwoDecimals(platformFee),
-        hostEarning: toTwoDecimals(hostEarning)
+        platformFee: 0, // DEPRECATED: No deduction from host
+        hostEarning: toTwoDecimals(hostSubtotal) // Host receives FULL subtotal
       },
       
-      // What TripMe sees
+      // What TripMe sees - PLATFORM EARNS ONLY processingFee
       platformBreakdown: {
-        platformFee: toTwoDecimals(platformFee),
+        platformFee: 0, // DEPRECATED
         processingFee: toTwoDecimals(processingFee),
         gst: toTwoDecimals(gst),
-        platformRevenue: toTwoDecimals(platformRevenue)
+        platformRevenue: toTwoDecimals(processingFee) // ONLY processingFee
       }
     }
   };

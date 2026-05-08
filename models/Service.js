@@ -10,7 +10,7 @@ const serviceSchema = new mongoose.Schema({
   description: {
     type: String,
     required: [true, 'Please enter a description'],
-    maxlength: [2000, 'Description cannot exceed 2000 characters']
+    maxlength: [500, 'Description cannot exceed 500 characters']
   },
   provider: {
     type: mongoose.Schema.Types.ObjectId,
@@ -19,13 +19,21 @@ const serviceSchema = new mongoose.Schema({
   },
   serviceType: {
     type: String,
-    enum: ['tour-guide', 'transport', 'fitness', 'chef', 'photographer', 'hairdresser', 'yoga-teacher', 'transportation', 'other'],
+    enum: ['tour-guide', 'transport', 'fitness', 'chef', 'photographer', 'hairdresser', 'yoga-teacher', 'transportation', 'cleaning', 'music', 'art', 'other'],
     required: true
   },
   duration: {
     value: {
       type: Number,
-      required: true
+      required: false
+    },
+    minDuration: {
+      type: Number,
+      required: false
+    },
+    maxDuration: {
+      type: Number,
+      required: false
     },
     unit: {
       type: String,

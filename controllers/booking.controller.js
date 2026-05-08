@@ -954,86 +954,163 @@ const processPaymentAndCreateBooking = async (req, res) => {
       const invoiceId = `INV_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const receiptId = `RCP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      const payment = await Payment.create([{
-        booking: bookingDoc._id,
-        user: req.user._id,
-        host: host._id,
-        amount: totalAmount,
-        currency: currency,
-        paymentMethod: mappedPaymentMethod,
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: Find and UPDATE existing canonical payment document.
+      // Payment document should already exist from createRazorpayOrder.
+      // We MUST NOT create a new payment here — only update the existing one.
+      // ═══════════════════════════════════════════════════════════════════════════
+      
+      let existingPayment = null;
+      if (razorpayOrderId || razorpayPaymentId) {
+        existingPayment = await Payment.findOne({
+          $or: [
+            ...(razorpayPaymentId ? [{ razorpayPaymentId }] : []),
+            ...(razorpayOrderId ? [{ razorpayOrderId }] : [])
+          ]
+        }).session(session);
+      }
 
-        // Payment details with transaction information
-        paymentDetails: {
+      if (existingPayment) {
+        // UPDATE existing payment document
+        console.log('📝 Updating existing canonical payment document:', existingPayment._id);
+        
+        existingPayment.booking = bookingDoc._id;
+        existingPayment.user = req.user._id;
+        existingPayment.host = host._id;
+        existingPayment.amount = totalAmount;
+        existingPayment.currency = currency;
+        existingPayment.paymentMethod = mappedPaymentMethod;
+        existingPayment.paymentDetails = {
           transactionId: transactionId,
           paymentGateway: 'razorpay',
           gatewayResponse: razorpayPaymentDetails
-        },
-        // Razorpay specific fields
-        razorpayOrderId: razorpayOrderId,
-        razorpayPaymentId: razorpayPaymentId,
-        razorpaySignature: razorpaySignature,
-
-        // Fee breakdown
-        subtotal: subtotal,
-        taxes: gst,
-        gst: gst,
-        processingFee: processingFee,
-        serviceFee: pricing.serviceFee,
-        cleaningFee: pricing.cleaningFee,
-        securityDeposit: pricing.securityDeposit,
-        discountAmount: pricing.discountAmount || 0,
-
-        // Commission structure
-        commission: {
+        };
+        existingPayment.razorpayPaymentId = razorpayPaymentId || existingPayment.razorpayPaymentId;
+        existingPayment.razorpaySignature = razorpaySignature || existingPayment.razorpaySignature;
+        existingPayment.subtotal = subtotal;
+        existingPayment.taxes = gst;
+        existingPayment.gst = gst;
+        existingPayment.processingFee = processingFee;
+        existingPayment.serviceFee = pricing.serviceFee;
+        existingPayment.cleaningFee = pricing.cleaningFee;
+        existingPayment.securityDeposit = pricing.securityDeposit;
+        existingPayment.discountAmount = pricing.discountAmount || 0;
+        existingPayment.commission = {
           platformFee: platformFee,
           hostEarning: hostEarning,
           processingFee: processingFee
-        },
-
-        // Complete pricing breakdown for audit trail
-        pricingBreakdown: breakdown,
-
-        // Payout tracking initialization
-        payout: {
+        };
+        existingPayment.pricingBreakdown = breakdown;
+        existingPayment.payout = {
           status: 'pending',
           scheduledDate: bookingType === 'property' ?
-            new Date(new Date(checkIn).getTime() + 24 * 60 * 60 * 1000) : // 24 hours after check-in
-            new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now for services
+            new Date(new Date(checkIn).getTime() + 24 * 60 * 60 * 1000) :
+            new Date(Date.now() + 24 * 60 * 60 * 1000),
           amount: hostEarning,
           method: 'bank_transfer',
           reference: `PAYOUT_${Date.now()}`,
           notes: `Payout for booking ${booking.receiptId}`
-        },
-
-        // Invoice and receipt information
-        invoiceId: invoiceId,
-        receiptUrl: `/receipts/${receiptId}`, // TODO: Generate actual receipt URL
-
-        // Coupon information if applied
-        coupon: couponApplied || null,
-
-        // Status and processing
-        status: 'processing',
-
-        // Security and audit metadata
-        metadata: {
+        };
+        existingPayment.invoiceId = invoiceId;
+        existingPayment.receiptUrl = `/receipts/${receiptId}`;
+        existingPayment.coupon = couponApplied || null;
+        existingPayment.status = 'processing';
+        existingPayment.metadata = {
+          ...existingPayment.metadata,
           idempotencyKey: finalIdempotencyKey,
           userAgent: req.get('User-Agent'),
           ipAddress: req.ip,
-          forwardedFor: req.get('X-Forwarded-For'),
-          realIp: req.get('X-Real-IP'),
-          referer: req.get('Referer'),
-          origin: req.get('Origin'),
-          timestamp: new Date().toISOString(),
-          securityVersion: '1.0',
-          sessionId: require('crypto').randomUUID(),
-          source: 'web',
           bookingType: bookingType,
           propertyId: actualListingId,
           serviceId: serviceId
-        }
-      }], { session });
-      paymentDoc = payment[0];
+        };
+        
+        // Add timeline entry
+        existingPayment.timeline = existingPayment.timeline || [];
+        existingPayment.timeline.push({
+          event: 'booking_payment_linked',
+          message: 'Payment linked to booking during booking creation',
+          timestamp: new Date(),
+          source: 'system',
+          data: { bookingId: bookingDoc._id, razorpayPaymentId }
+        });
+        
+        await existingPayment.save({ session });
+        paymentDoc = existingPayment;
+        
+      } else {
+        // FALLBACK: Create new payment only if no existing document found
+        console.warn('⚠️ No existing payment found for razorpayOrderId, creating new document');
+        
+        const payment = await Payment.create([{
+          booking: bookingDoc._id,
+          user: req.user._id,
+          host: host._id,
+          amount: totalAmount,
+          currency: currency,
+          paymentMethod: mappedPaymentMethod,
+          paymentDetails: {
+            transactionId: transactionId,
+            paymentGateway: 'razorpay',
+            gatewayResponse: razorpayPaymentDetails
+          },
+          razorpayOrderId: razorpayOrderId,
+          razorpayPaymentId: razorpayPaymentId,
+          razorpaySignature: razorpaySignature,
+          subtotal: subtotal,
+          taxes: gst,
+          gst: gst,
+          processingFee: processingFee,
+          serviceFee: pricing.serviceFee,
+          cleaningFee: pricing.cleaningFee,
+          securityDeposit: pricing.securityDeposit,
+          discountAmount: pricing.discountAmount || 0,
+          commission: {
+            platformFee: platformFee,
+            hostEarning: hostEarning,
+            processingFee: processingFee
+          },
+          pricingBreakdown: breakdown,
+          payout: {
+            status: 'pending',
+            scheduledDate: bookingType === 'property' ?
+              new Date(new Date(checkIn).getTime() + 24 * 60 * 60 * 1000) :
+              new Date(Date.now() + 24 * 60 * 60 * 1000),
+            amount: hostEarning,
+            method: 'bank_transfer',
+            reference: `PAYOUT_${Date.now()}`,
+            notes: `Payout for booking ${booking.receiptId}`
+          },
+          invoiceId: invoiceId,
+          receiptUrl: `/receipts/${receiptId}`,
+          coupon: couponApplied || null,
+          status: 'processing',
+          metadata: {
+            idempotencyKey: finalIdempotencyKey,
+            userAgent: req.get('User-Agent'),
+            ipAddress: req.ip,
+            forwardedFor: req.get('X-Forwarded-For'),
+            realIp: req.get('X-Real-IP'),
+            referer: req.get('Referer'),
+            origin: req.get('Origin'),
+            timestamp: new Date().toISOString(),
+            securityVersion: '1.0',
+            sessionId: require('crypto').randomUUID(),
+            source: 'web',
+            bookingType: bookingType,
+            propertyId: actualListingId,
+            serviceId: serviceId
+          },
+          timeline: [{
+            event: 'payment_created_fallback',
+            message: 'Payment created during booking (no canonical document found)',
+            timestamp: new Date(),
+            source: 'system',
+            data: { razorpayOrderId, razorpayPaymentId }
+          }]
+        }], { session });
+        paymentDoc = payment[0];
+      }
 
       // await payment.save();
 

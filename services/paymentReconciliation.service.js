@@ -13,7 +13,9 @@ const razorpayService = require('./razorpay.service');
 const { logger } = require('../config/logger');
 
 const MAX_RECONCILIATION_ATTEMPTS = 5;
-const STALE_THRESHOLD_MINUTES = 5; // Only reconcile payments older than 5 minutes
+const MAX_RECOVERY_ATTEMPTS = 3;
+const STALE_THRESHOLD_MINUTES = 5;
+const ABANDONED_THRESHOLD_HOURS = 2;
 
 /**
  * Main reconciliation job — called by cron in server.js
@@ -22,50 +24,57 @@ async function runReconciliation() {
   const jobStart = Date.now();
   logger.info('Starting payment reconciliation job');
 
+  const stats = { reconciled: 0, failed: 0, skipped: 0, recovered: 0, abandoned: 0 };
+
   try {
-    const staleThreshold = new Date(Date.now() - STALE_THRESHOLD_MINUTES * 60 * 1000);
+    // Phase 1: Reconcile stale payments with razorpayPaymentId
+    await reconcileStalePayments(stats);
 
-    // Find all payments that may need reconciliation:
-    // - pending / authorized (not yet captured)
-    // - Not exceeding max retry attempts
-    // - Created more than STALE_THRESHOLD_MINUTES ago
-    const stalePayments = await Payment.find({
-      status: { $in: ['pending', 'processing', 'authorized'] },
-      reconciliationAttempts: { $lt: MAX_RECONCILIATION_ATTEMPTS },
-      createdAt: { $lt: staleThreshold },
-      razorpayPaymentId: { $exists: true, $ne: null },
-    }).limit(50); // Process at most 50 per run to avoid overloading Razorpay API
+    // Phase 2: Process payments flagged for recovery
+    await processRecoveryQueue(stats);
 
-    if (stalePayments.length === 0) {
-      logger.debug('No stale payments found');
-      return;
-    }
-
-    logger.info(`Found ${stalePayments.length} stale payment(s) to reconcile`);
-
-    let reconciled = 0;
-    let failed = 0;
-    let skipped = 0;
-
-    for (const payment of stalePayments) {
-      try {
-        const result = await reconcilePayment(payment);
-        if (result === 'reconciled') reconciled++;
-        else if (result === 'failed') failed++;
-        else skipped++;
-      } catch (err) {
-        logger.error('Error reconciling payment', { paymentId: payment._id, error: err.message });
-        // Increment attempt counter even on error so we don't keep retrying broken payments
-        await Payment.findByIdAndUpdate(payment._id, {
-          $inc: { reconciliationAttempts: 1 }
-        });
-      }
-    }
+    // Phase 3: Handle abandoned checkouts
+    await handleAbandonedCheckouts(stats);
 
     const elapsed = ((Date.now() - jobStart) / 1000).toFixed(1);
-    logger.info(`Reconciliation complete in ${elapsed}s`, { reconciled, failed, skipped });
+    logger.info(`Reconciliation complete in ${elapsed}s`, stats);
   } catch (err) {
-    logger.error('Reconciliation job error', { error: err.message });
+    logger.error('Reconciliation job error', { error: err.message, stack: err.stack });
+  }
+}
+
+/**
+ * Phase 1: Reconcile stale payments that have a razorpayPaymentId
+ */
+async function reconcileStalePayments(stats) {
+  const staleThreshold = new Date(Date.now() - STALE_THRESHOLD_MINUTES * 60 * 1000);
+
+  const stalePayments = await Payment.find({
+    status: { $in: ['pending', 'processing', 'authorized'] },
+    reconciliationAttempts: { $lt: MAX_RECONCILIATION_ATTEMPTS },
+    createdAt: { $lt: staleThreshold },
+    razorpayPaymentId: { $exists: true, $ne: null },
+  }).limit(50);
+
+  if (stalePayments.length === 0) {
+    logger.debug('No stale payments found');
+    return;
+  }
+
+  logger.info(`Found ${stalePayments.length} stale payment(s) to reconcile`);
+
+  for (const payment of stalePayments) {
+    try {
+      const result = await reconcilePayment(payment);
+      if (result === 'reconciled') stats.reconciled++;
+      else if (result === 'failed') stats.failed++;
+      else stats.skipped++;
+    } catch (err) {
+      logger.error('Error reconciling payment', { paymentId: payment._id, error: err.message });
+      await Payment.findByIdAndUpdate(payment._id, {
+        $inc: { reconciliationAttempts: 1 }
+      });
+    }
   }
 }
 
@@ -97,6 +106,14 @@ async function reconcilePayment(payment) {
     'paymentDetails.gatewayResponse': rzpPayment,
   });
 
+  // Add timeline entry for reconciliation check
+  await Payment.addTimelineEntry(payment._id, {
+    event: 'reconciliation_check',
+    message: `Reconciliation fetched Razorpay status: ${rzpStatus}`,
+    source: 'reconciliation',
+    data: { rzpStatus, attempt: (payment.reconciliationAttempts || 0) + 1 }
+  });
+
   if (rzpStatus === 'captured') {
     return await handleCapturedPayment(payment, rzpPayment);
   }
@@ -121,23 +138,29 @@ async function reconcilePayment(payment) {
 }
 
 /**
- * Handle a captured payment — create booking if not already created.
+ * Handle a captured payment — confirm booking or flag for recovery if missing.
  */
 async function handleCapturedPayment(payment, rzpPayment) {
-  // Check if booking already exists and is confirmed
   const existingBooking = await Booking.findById(payment.booking);
+  
+  // Case 1: Booking exists and already confirmed
   if (existingBooking && ['confirmed', 'pending'].includes(existingBooking.status) && existingBooking.paymentStatus === 'paid') {
     logger.debug('Booking already confirmed, skipping', { bookingId: payment.booking });
-    // Just ensure payment status is marked complete
     await Payment.findByIdAndUpdate(payment._id, {
       status: 'completed',
       webhookStatus: 'captured',
       webhookReceivedAt: payment.webhookReceivedAt || new Date(),
     });
+    await Payment.addTimelineEntry(payment._id, {
+      event: 'reconciliation_skipped',
+      message: 'Booking already confirmed, no action needed',
+      source: 'reconciliation',
+      data: { bookingId: payment.booking }
+    });
     return 'skipped';
   }
 
-  logger.info('Payment captured, confirming booking', { paymentId: payment._id, bookingId: payment.booking });
+  logger.info('Payment captured, confirming booking via reconciliation', { paymentId: payment._id, bookingId: payment.booking });
 
   // Update payment to completed
   await Payment.findByIdAndUpdate(payment._id, {
@@ -148,12 +171,19 @@ async function handleCapturedPayment(payment, rzpPayment) {
     orderStatus: 'paid',
   });
 
-  // Update booking to confirmed
+  // Case 2: Booking exists but not confirmed yet
   if (existingBooking) {
     existingBooking.paymentStatus = 'paid';
     existingBooking.status = 'confirmed';
     await existingBooking.save();
     logger.info('Booking confirmed via reconciliation', { bookingId: existingBooking._id });
+
+    await Payment.addTimelineEntry(payment._id, {
+      event: 'booking_confirmed',
+      message: 'Booking confirmed via reconciliation',
+      source: 'reconciliation',
+      data: { bookingId: existingBooking._id }
+    });
 
     // Send confirmation email
     try {
@@ -169,16 +199,35 @@ async function handleCapturedPayment(payment, rzpPayment) {
     } catch (emailErr) {
       logger.warn('Failed to send confirmation email during reconciliation', { error: emailErr.message });
     }
+    return 'reconciled';
   }
+
+  // Case 3: Payment captured but NO booking exists — flag for recovery
+  logger.error('CRITICAL: Payment captured but booking not found — flagging for recovery', {
+    paymentId: payment._id,
+    bookingId: payment.booking,
+    rzpPaymentId: rzpPayment?.id
+  });
+
+  await Payment.findByIdAndUpdate(payment._id, {
+    recoveryStatus: 'recovery_required',
+  });
+
+  await Payment.addTimelineEntry(payment._id, {
+    event: 'recovery_flagged',
+    message: 'Payment captured but booking not found. Flagged for manual recovery.',
+    source: 'reconciliation',
+    data: { bookingId: payment.booking, rzpPaymentId: rzpPayment?.id }
+  });
 
   return 'reconciled';
 }
 
 /**
- * Handle a failed payment — mark everything accordingly.
+ * Handle a failed payment — mark everything accordingly with safe availability revert.
  */
 async function handleFailedPayment(payment, rzpPayment) {
-  logger.warn('Payment failed in Razorpay', { paymentId: payment._id });
+  logger.warn('Payment failed in Razorpay (via reconciliation)', { paymentId: payment._id });
 
   const failureDetails = {
     error_code: rzpPayment.error_code,
@@ -195,24 +244,199 @@ async function handleFailedPayment(payment, rzpPayment) {
     failureDetails,
   });
 
-  // Cancel the booking
-  if (payment.booking) {
-    await Booking.findByIdAndUpdate(payment.booking, {
-      paymentStatus: 'failed',
-      status: 'cancelled',
-    });
-    logger.info('Booking cancelled due to payment failure', { bookingId: payment.booking });
+  await Payment.addTimelineEntry(payment._id, {
+    event: 'payment.failed',
+    message: `Payment failed via reconciliation: ${rzpPayment.error_description || rzpPayment.error_code || 'unknown'}`,
+    source: 'reconciliation',
+    data: { failureDetails }
+  });
 
-    // Revert availability
-    try {
-      const { updateAvailabilityStatus } = require('../controllers/availability.controller');
-      await updateAvailabilityStatus(payment.booking, 'available');
-    } catch (availErr) {
-      logger.warn('Failed to revert availability', { bookingId: payment.booking, error: availErr.message });
+  // Cancel the booking with safe availability revert
+  if (payment.booking) {
+    const booking = await Booking.findById(payment.booking);
+    
+    if (booking && booking.status !== 'cancelled') {
+      // SAFETY: Don't cancel if booking is already confirmed+paid
+      if (booking.paymentStatus === 'paid' && booking.status === 'confirmed') {
+        logger.warn('Reconciliation: payment.failed but booking is confirmed+paid. Skipping cancellation.', {
+          bookingId: booking._id,
+          paymentId: payment._id
+        });
+        await Payment.addTimelineEntry(payment._id, {
+          event: 'booking_cancel_skipped',
+          message: 'Booking is confirmed+paid. Skipping cancellation despite failed payment.',
+          source: 'reconciliation',
+          data: { bookingId: booking._id }
+        });
+      } else {
+        booking.paymentStatus = 'failed';
+        booking.status = 'cancelled';
+        await booking.save();
+        logger.info('Booking cancelled due to payment failure (reconciliation)', { bookingId: booking._id });
+
+        // SAFE availability revert: only if no other confirmed booking exists
+        try {
+          const { updateAvailabilityStatus } = require('../controllers/availability.controller');
+          const confirmedBooking = await Booking.findOne({
+            _id: { $ne: booking._id },
+            listing: booking.listing,
+            status: 'confirmed',
+            paymentStatus: 'paid',
+            checkIn: booking.checkIn,
+            checkOut: booking.checkOut
+          });
+          if (!confirmedBooking) {
+            await updateAvailabilityStatus(payment.booking, 'available');
+            logger.info('Availability reverted via reconciliation', { bookingId: booking._id });
+          } else {
+            logger.info('Availability NOT reverted — another confirmed booking exists', {
+              bookingId: booking._id,
+              confirmedBookingId: confirmedBooking._id
+            });
+          }
+        } catch (availErr) {
+          logger.warn('Failed to revert availability', { bookingId: payment.booking, error: availErr.message });
+        }
+      }
     }
   }
 
   return 'failed';
 }
 
-module.exports = { runReconciliation, reconcilePayment };
+/**
+ * Phase 2: Process payments flagged for recovery (captured but booking missing/orphan)
+ */
+async function processRecoveryQueue(stats) {
+  const recoveryPayments = await Payment.find({
+    recoveryStatus: 'recovery_required',
+    recoveryAttempts: { $lt: MAX_RECOVERY_ATTEMPTS },
+    status: 'completed',
+  }).limit(20);
+
+  if (recoveryPayments.length === 0) return;
+
+  logger.info(`Processing ${recoveryPayments.length} payment(s) flagged for recovery`);
+
+  for (const payment of recoveryPayments) {
+    try {
+      await Payment.findByIdAndUpdate(payment._id, {
+        $inc: { recoveryAttempts: 1 },
+        recoveryStatus: 'recovery_in_progress',
+      });
+
+      // For orphan payments (no booking), we can't auto-recover — just log and alert
+      if (!payment.booking) {
+        logger.error('ORPHAN PAYMENT requires manual recovery', {
+          paymentId: payment._id,
+          rzpPaymentId: payment.razorpayPaymentId,
+          amount: payment.amount
+        });
+        await Payment.addTimelineEntry(payment._id, {
+          event: 'recovery_manual_required',
+          message: 'Orphan payment with no booking reference. Manual intervention required.',
+          source: 'recovery',
+          data: { attempt: (payment.recoveryAttempts || 0) + 1 }
+        });
+        // Keep as recovery_required for admin attention
+        await Payment.findByIdAndUpdate(payment._id, { recoveryStatus: 'recovery_required' });
+        continue;
+      }
+
+      // Check if booking now exists (might have been created after initial flag)
+      const booking = await Booking.findById(payment.booking);
+      if (booking) {
+        if (booking.paymentStatus !== 'paid') {
+          booking.paymentStatus = 'paid';
+          booking.status = 'confirmed';
+          await booking.save();
+        }
+        await Payment.findByIdAndUpdate(payment._id, {
+          recoveryStatus: 'recovered',
+          recoveredAt: new Date(),
+        });
+        await Payment.addTimelineEntry(payment._id, {
+          event: 'recovery_completed',
+          message: 'Booking found and confirmed during recovery',
+          source: 'recovery',
+          data: { bookingId: booking._id }
+        });
+        stats.recovered++;
+        logger.info('Payment recovered successfully', { paymentId: payment._id, bookingId: booking._id });
+      } else {
+        // Booking still missing — keep flagged
+        await Payment.findByIdAndUpdate(payment._id, { recoveryStatus: 'recovery_required' });
+        await Payment.addTimelineEntry(payment._id, {
+          event: 'recovery_pending',
+          message: 'Booking still not found. Requires manual intervention.',
+          source: 'recovery',
+          data: { attempt: (payment.recoveryAttempts || 0) + 1 }
+        });
+      }
+    } catch (err) {
+      logger.error('Error in recovery processing', { paymentId: payment._id, error: err.message });
+      await Payment.findByIdAndUpdate(payment._id, { recoveryStatus: 'recovery_required' });
+    }
+  }
+}
+
+/**
+ * Phase 3: Handle abandoned checkouts (orders created but never completed)
+ */
+async function handleAbandonedCheckouts(stats) {
+  const abandonedThreshold = new Date(Date.now() - ABANDONED_THRESHOLD_HOURS * 60 * 60 * 1000);
+
+  // Find payments with only razorpayOrderId (no paymentId) that are old
+  const abandonedPayments = await Payment.find({
+    status: 'pending',
+    razorpayOrderId: { $exists: true, $ne: null },
+    razorpayPaymentId: { $exists: false },
+    createdAt: { $lt: abandonedThreshold },
+    reconciliationAttempts: { $lt: MAX_RECONCILIATION_ATTEMPTS },
+  }).limit(30);
+
+  if (abandonedPayments.length === 0) return;
+
+  logger.info(`Found ${abandonedPayments.length} abandoned checkout(s)`);
+
+  for (const payment of abandonedPayments) {
+    try {
+      // Mark as failed/abandoned
+      await Payment.findByIdAndUpdate(payment._id, {
+        status: 'cancelled',
+        $inc: { reconciliationAttempts: 1 },
+      });
+
+      await Payment.addTimelineEntry(payment._id, {
+        event: 'checkout_abandoned',
+        message: 'Order created but no payment attempt after threshold. Marked as abandoned.',
+        source: 'reconciliation',
+        data: { hoursElapsed: ABANDONED_THRESHOLD_HOURS }
+      });
+
+      // Cancel associated booking if exists
+      if (payment.booking) {
+        const booking = await Booking.findById(payment.booking);
+        if (booking && booking.status === 'pending') {
+          booking.status = 'cancelled';
+          booking.paymentStatus = 'failed';
+          await booking.save();
+
+          // Safe availability revert
+          try {
+            const { updateAvailabilityStatus } = require('../controllers/availability.controller');
+            await updateAvailabilityStatus(payment.booking, 'available');
+          } catch (availErr) {
+            logger.warn('Failed to revert availability for abandoned checkout', { error: availErr.message });
+          }
+        }
+      }
+
+      stats.abandoned++;
+    } catch (err) {
+      logger.error('Error handling abandoned checkout', { paymentId: payment._id, error: err.message });
+    }
+  }
+}
+
+module.exports = { runReconciliation, reconcilePayment, processRecoveryQueue, handleAbandonedCheckouts };

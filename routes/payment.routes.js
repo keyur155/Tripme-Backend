@@ -61,7 +61,6 @@ router.post('/:paymentId/refund', AuthorizationMiddleware.canAccessPayment, vali
 router.get('/refunds', paymentController.getRefundHistory);
 router.get('/refunds/:refundId', AuthorizationMiddleware.canAccessPayment, paymentController.getRefundById);
 
-
 // Payment statistics and analytics
 router.get('/stats/overview', paymentController.getPaymentStats);
 router.get('/stats/monthly', paymentController.getMonthlyPaymentStats);
@@ -74,4 +73,13 @@ router.post('/admin/payouts/:payoutId/process', adminOnly, paymentController.pro
 router.get('/admin/stats', adminOnly, paymentController.getAdminPaymentStats);
 router.patch('/admin/:paymentId/status', adminOnly, paymentController.updatePaymentStatus);
 
-module.exports = router; 
+// Admin debug routes (for payment debugging and reconciliation)
+router.get('/admin/debug/search', adminOnly, paymentController.adminSearchPayment);
+router.get('/admin/debug/orphans', adminOnly, paymentController.getOrphanPayments);
+router.get('/admin/debug/recovery-queue', adminOnly, paymentController.getRecoveryQueue);
+router.get('/admin/debug/failed', adminOnly, paymentController.getFailedPayments);
+router.get('/admin/debug/reconciliation-stats', adminOnly, paymentController.getReconciliationStats);
+router.get('/admin/debug/:paymentId/timeline', adminOnly, paymentController.getPaymentTimeline);
+router.post('/admin/debug/:paymentId/reconcile', adminOnly, paymentController.manualReconcile);
+
+module.exports = router;

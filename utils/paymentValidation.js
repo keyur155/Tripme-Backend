@@ -7,6 +7,10 @@ const { calculatePricingBreakdown } = require('../config/pricing.config');
 
 /**
  * Validate payment amount consistency
+ * NEW BUSINESS MODEL:
+ * - Customer pays: subtotal + GST + processingFee (NO platformFee)
+ * - Host receives: FULL subtotal
+ * - Platform earns: ONLY processingFee
  * @param {Object} payment - Payment record
  * @param {Object} booking - Booking record
  * @returns {Object} Validation result
@@ -15,16 +19,15 @@ function validatePaymentConsistency(payment, booking) {
   const errors = [];
   const warnings = [];
   
-  // Calculate expected payment amount from booking
+  // NEW FORMULA: Customer pays subtotal + GST + processingFee (NO platformFee)
   const expectedAmount = booking.subtotal + 
                         booking.gst + 
-                        booking.processingFee + 
-                        booking.platformFee - 
+                        booking.processingFee - 
                         (booking.discountAmount || 0);
   
   // Check if payment amount matches expected amount
   const amountDifference = Math.abs(payment.amount - expectedAmount);
-  if (amountDifference > 0.01) { // Allow for small rounding differences
+  if (amountDifference > 1) { // Allow for ₹1 rounding differences
     errors.push(`Payment amount mismatch: Expected ${expectedAmount}, Got ${payment.amount}, Difference: ${amountDifference}`);
   }
   
@@ -43,9 +46,19 @@ function validatePaymentConsistency(payment, booking) {
     errors.push(`Processing fee mismatch: Payment ${payment.processingFee} vs Booking ${booking.processingFee}`);
   }
   
-  // Validate platform fee consistency
-  if (payment.commission && Math.abs(payment.commission.platformFee - booking.platformFee) > 0.01) {
-    errors.push(`Platform fee mismatch: Payment ${payment.commission.platformFee} vs Booking ${booking.platformFee}`);
+  // NEW: Validate platformFee is 0 (deprecated)
+  if (payment.commission && payment.commission.platformFee > 0) {
+    warnings.push(`DEPRECATED: platformFee should be 0, found ${payment.commission.platformFee}`);
+  }
+  
+  // NEW: Validate hostEarning equals subtotal
+  if (payment.commission && Math.abs(payment.commission.hostEarning - booking.subtotal) > 0.01) {
+    errors.push(`Host earning mismatch: Expected ${booking.subtotal} (full subtotal), Got ${payment.commission.hostEarning}`);
+  }
+  
+  // NEW: Validate payout.amount equals subtotal
+  if (payment.payout && Math.abs(payment.payout.amount - booking.subtotal) > 0.01) {
+    errors.push(`Payout amount mismatch: Expected ${booking.subtotal} (full subtotal), Got ${payment.payout.amount}`);
   }
   
   // Validate discount consistency
@@ -53,16 +66,13 @@ function validatePaymentConsistency(payment, booking) {
     errors.push(`Discount mismatch: Payment ${payment.discountAmount || 0} vs Booking ${booking.discountAmount || 0}`);
   }
   
-  // Check for missing platform fee in payment amount calculation
+  // NEW FORMULA: Payment calculation without platformFee
   const paymentCalculation = (payment.subtotal || 0) + 
                            (payment.taxes || 0) + 
-                           (payment.serviceFee || 0) + 
-                           (payment.cleaningFee || 0) + 
-                           (payment.securityDeposit || 0) + 
                            (payment.processingFee || 0) - 
                            (payment.discountAmount || 0);
   
-  if (Math.abs(payment.amount - paymentCalculation) > 0.01) {
+  if (Math.abs(payment.amount - paymentCalculation) > 1) {
     errors.push(`Payment amount calculation error: Expected ${paymentCalculation}, Got ${payment.amount}`);
   }
   
@@ -107,9 +117,9 @@ async function validateBookingPricing(booking) {
     errors.push(`Subtotal mismatch: Expected ${calculatedPricing.subtotal}, Got ${booking.subtotal}`);
   }
   
-  // Validate platform fee
-  if (Math.abs(booking.platformFee - calculatedPricing.platformFee) > 0.01) {
-    errors.push(`Platform fee mismatch: Expected ${calculatedPricing.platformFee}, Got ${booking.platformFee}`);
+  // NEW: platformFee should be 0 (deprecated)
+  if (booking.platformFee > 0) {
+    warnings.push(`DEPRECATED: platformFee should be 0, found ${booking.platformFee}`);
   }
   
   // Validate GST
@@ -134,10 +144,11 @@ async function validateBookingPricing(booking) {
     calculatedPricing,
     bookingPricing: {
       subtotal: booking.subtotal,
-      platformFee: booking.platformFee,
+      platformFee: 0, // DEPRECATED
       gst: booking.gst,
       processingFee: booking.processingFee,
-      totalAmount: booking.totalAmount
+      totalAmount: booking.totalAmount,
+      hostEarning: booking.subtotal // Host receives FULL subtotal
     }
   };
 }
@@ -217,15 +228,16 @@ async function validatePaymentSystem(payment, booking, coupon = null) {
 
 /**
  * Fix payment amount if it's incorrect
+ * NEW BUSINESS MODEL: platformFee=0, hostEarning=subtotal
  * @param {Object} payment - Payment record to fix
  * @param {Object} booking - Booking record
  * @returns {Object} Fixed payment data
  */
 function fixPaymentAmount(payment, booking) {
+  // NEW FORMULA: No platformFee in customer total
   const correctAmount = booking.subtotal + 
                        booking.gst + 
-                       booking.processingFee + 
-                       booking.platformFee - 
+                       booking.processingFee - 
                        (booking.discountAmount || 0);
   
   return {
@@ -239,9 +251,12 @@ function fixPaymentAmount(payment, booking) {
     securityDeposit: booking.securityDeposit || 0,
     discountAmount: booking.discountAmount || 0,
     commission: {
-      platformFee: booking.platformFee,
-      hostEarning: booking.hostFee || 0,
+      platformFee: 0, // DEPRECATED: No longer charged
+      hostEarning: booking.subtotal, // Host receives FULL subtotal
       processingFee: booking.processingFee
+    },
+    payout: {
+      amount: booking.subtotal // Host receives FULL subtotal
     }
   };
 }

@@ -24,7 +24,7 @@ const validateListing = (req, res, next) => {
         'any.required': 'Description is required'
       }),
     type: Joi.string()
-      .valid('villa', 'apartment', 'hostel', 'house', 'cottage', 'cabin', 'treehouse', 'boat')
+      .valid('villa', 'apartment', 'hostel','guesthouse','hotel', 'house', 'cottage', 'cabin', 'treehouse', 'boat', 'farm', 'camper', 'tent', 'castle')
       .required()
       .messages({
         'any.only': 'Property type must be one of the valid options',
@@ -456,7 +456,7 @@ const validateListingUpdate = (req, res, next) => {
         'any.only': 'Property type must be one of: premium, standard, budget, luxury'
       }),
     type: Joi.string()
-      .valid('villa', 'apartment', 'hostel', 'house', 'cottage', 'cabin', 'treehouse', 'boat')
+      .valid('villa', 'apartment', 'hostel','guesthouse','hotel', 'house', 'cottage', 'cabin', 'treehouse', 'boat', 'farm', 'camper', 'tent', 'castle')
       .optional()
       .messages({
         'any.only': 'Property type must be one of the valid options'
@@ -658,7 +658,7 @@ const validateListingUpdate = (req, res, next) => {
         })
     }).optional(),
     amenities: Joi.array()
-      .items(Joi.string().valid('wifi', 'tv', 'kitchen', 'washer', 'dryer', 'ac', 'heating', 'workspace', 'pool', 'hot-tub', 'parking', 'gym', 'breakfast', 'smoke-alarm', 'carbon-monoxide-alarm', 'first-aid-kit', 'fire-extinguisher', 'essentials' ,'security'))
+      .items(Joi.string().valid('wifi', 'tv', 'kitchen', 'washer', 'dryer', 'ac', 'heating', 'workspace', 'pool', 'hot-tub', 'parking', 'gym', 'breakfast', 'smoke-alarm', 'carbon-monoxide-alarm', 'first-aid-kit', 'fire-extinguisher', 'essentials', 'fireplace', 'security'))
       .max(50)
       .optional()
       .messages({
@@ -706,6 +706,17 @@ const validateListingUpdate = (req, res, next) => {
     images: Joi.array()
       .items(Joi.object({
         url: Joi.string().uri().optional().allow(''),
+        category: Joi.string()
+          .valid(
+            'Living room',
+            'Bedroom',
+            'Kitchen',
+            'Bathroom',
+            'Exterior',
+            'Amenities',
+            'Other'
+          )
+          .optional(),
         publicId: Joi.string().optional().allow(''),
         isPrimary: Joi.boolean().optional(),
         caption: Joi.string().optional().allow(''),

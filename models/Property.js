@@ -45,7 +45,7 @@ const propertySchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['villa', 'apartment', 'hostel', 'house', 'cottage', 'cabin', 'treehouse', 'boat'],
+    enum: ['villa', 'apartment', 'hostel', 'guesthouse', 'hotel', 'house', 'cottage', 'cabin', 'treehouse', 'boat', 'farm', 'camper', 'tent', 'castle'],
     required: true
   },
   propertyType: {
