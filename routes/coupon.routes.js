@@ -31,10 +31,10 @@ router.get('/stats/popular', AuthorizationMiddleware.isAdmin, couponController.g
 router.get('/stats/effectiveness', AuthorizationMiddleware.isAdmin, couponController.getCouponEffectiveness);
 
 // Admin routes (admin only)
-router.get('/admin/all', couponController.getAllCouponsAdmin);
-router.get('/admin/expired', couponController.getExpiredCoupons);
-router.get('/admin/active', couponController.getActiveCoupons);
-router.patch('/admin/:id/status', couponController.updateCouponStatus);
-router.post('/admin/bulk-create', couponController.bulkCreateCoupons);
+router.get('/admin/all', AuthorizationMiddleware.isAdmin, couponController.getAllCouponsAdmin);
+router.get('/admin/expired', AuthorizationMiddleware.isAdmin, couponController.getExpiredCoupons);
+router.get('/admin/active', AuthorizationMiddleware.isAdmin, couponController.getActiveCoupons);
+router.patch('/admin/:id/status', AuthorizationMiddleware.isAdmin, couponController.updateCouponStatus);
+router.post('/admin/bulk-create', AuthorizationMiddleware.isAdmin, couponController.bulkCreateCoupons);
 
 module.exports = router; 

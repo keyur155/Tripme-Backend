@@ -179,8 +179,15 @@ function verifyPayment(orderId, paymentId, signature) {
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(`${orderId}|${paymentId}`)
       .digest('hex');
-  
-    return generatedSignature === signature;
+
+    try {
+      return crypto.timingSafeEqual(
+        Buffer.from(generatedSignature, 'hex'),
+        Buffer.from(signature, 'hex')
+      );
+    } catch (error) {
+      return false;
+    }
   }
 
 function verifyWebhookSignature(payload, signature) {

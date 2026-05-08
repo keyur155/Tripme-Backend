@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const { protect } = require('../middlewares/auth.middleware');
 const { isAdmin } = require('../middlewares/authorization.middleware');
 const authController = require('../controllers/auth.controller');
@@ -9,8 +10,17 @@ const { validateLogin, validateAdminSignup } = require('../validations/auth.vali
 const adminController = require('../controllers/admin.controller');
 const popularDestController = require('../controllers/popularDestination.controller');
 
+// Strict rate limit on admin signup — max 3 attempts per hour per IP
+const adminSignupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  message: { success: false, message: 'Too many admin signup attempts' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Public admin routes (no authentication required)
-router.post('/signup', validateAdminSignup, adminController.adminSignup);
+router.post('/signup', adminSignupLimiter, validateAdminSignup, adminController.adminSignup);
 router.post('/login', validateLogin, authController.adminLogin);
 router.get('/pricing/platform-fee/public', adminController.getCurrentPlatformFeeRate);
 
@@ -27,11 +37,7 @@ router.put('/pricing/platform-fee', adminController.updatePlatformFeeRate);
 router.get('/pricing/platform-fee/history', adminController.getPlatformFeeHistory);
 
 // User management routes
-router.get('/users', (req, res, next) => {
-  console.log('🔍 Admin users route hit');
-  console.log('🔍 Request user:', req.user);
-  next();
-}, adminController.getUsers);
+router.get('/users', adminController.getUsers);
 router.put('/users/:userId/status', adminController.updateUserStatus);
 router.get('/users/:userId', adminController.getUser);
 router.put('/users/:userId', adminController.updateUser);

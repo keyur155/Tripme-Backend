@@ -31,7 +31,8 @@ const getFrontendUrl = () =>
 // @access  Public
 const registerUser = async (req, res) => {
   try {
-    const { name, email, password, phone, role = 'guest' } = req.body;
+    const { name, email, password, phone } = req.body;
+    const role = 'guest';
 
     // Check if user already exists
     const userExists = await User.findOne({ email });
@@ -69,8 +70,6 @@ const registerUser = async (req, res) => {
     // Send verification email (non-blocking with timeout to avoid slowing registration on cold deploys)
     const frontendUrl = getFrontendUrl();
     const verificationUrl = `${frontendUrl}/auth/verify-email?token=${verificationToken}`;
-    console.log('Sending welcome email to:', user.email);
-    console.log('Verification URL:', verificationUrl);
 
     const sendEmailWithTimeout = async () => {
       const timeoutMs = 5000;
@@ -81,8 +80,7 @@ const registerUser = async (req, res) => {
     };
 
     sendEmailWithTimeout()
-      .then((emailResult) => console.log('Welcome email sent (async):', emailResult))
-      .catch((emailError) => console.warn('Welcome email send skipped/failed (non-blocking):', emailError.message));
+      .catch(() => {});
     
     // User starts as unverified - they must verify their email
     // user.isVerified = false; // This is the default value
@@ -143,20 +141,16 @@ const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Check if user exists
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
-       console.log("❌ Email not found");
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password'
       });
     }
 
-    // Check if password is correct
     const isPasswordCorrect = await user.comparePassword(password);
     if (!isPasswordCorrect) {
-      console.log("invalid passwoerd");
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password'
@@ -267,38 +261,37 @@ const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
 
+    // Always return the same response to prevent user enumeration
+    const genericResponse = {
+      success: true,
+      message: 'If an account with that email exists, a password reset link has been sent'
+    };
+
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(200).json(genericResponse);
     }
 
-    // Generate reset token
+    // Generate reset token and store hashed version
     const resetToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
     await VerificationToken.create({
       user: user._id,
-      token: resetToken,
+      token: hashedToken,
       type: 'password_reset',
       expiresAt: new Date(Date.now() + 60 * 60 * 1000) // 1 hour
     });
 
-    // Send reset email
-    // Use frontend URL for password reset - the frontend will handle the API call
+    // Send reset email (with unhashed token — user receives the raw token)
     const frontendUrl = getFrontendUrl();
     const resetUrl = `${frontendUrl}/auth/reset-password?token=${resetToken}`;
     await sendPasswordResetEmail(user.email, user.name, resetUrl);
 
-    res.status(200).json({
-      success: true,
-      message: 'Password reset email sent'
-    });
+    res.status(200).json(genericResponse);
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Error sending password reset email',
-      error: error.message
+      message: 'Error processing request'
     });
   }
 };
@@ -311,8 +304,10 @@ const resetPassword = async (req, res) => {
     const { token } = req.params;
     const { password } = req.body;
 
+    // Hash the incoming token to compare with stored hash
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
     const verificationToken = await VerificationToken.findOne({
-      token,
+      token: hashedToken,
       type: 'password_reset',
       expiresAt: { $gt: new Date() }
     });
@@ -503,21 +498,12 @@ const socialLogin = async (req, res) => {
 
     if (provider === 'google') {
       try {
-        console.log('Attempting to verify Google token...');
-        console.log('Token length:', token ? token.length : 0);
-        console.log('Token preview:', token ? token.substring(0, 20) + '...' : 'No token');
-        
-        // Call Google userinfo directly with the user's access token
         const userInfoResponse = await fetchGoogleUserInfo(token);
 
-        console.log('Google API response status:', userInfoResponse.status);
-
         if (userInfoResponse.status !== 200) {
-            console.error('Google API error response:', userInfoResponse.data);
             return res.status(401).json({
               success: false,
-              message: 'Invalid Google access token',
-              debug: process.env.NODE_ENV === 'development' ? userInfoResponse.data : undefined
+              message: 'Invalid Google access token'
             })
           }
         // if (!userInfoResponse.ok) {
@@ -570,7 +556,6 @@ const socialLogin = async (req, res) => {
           };
           
           const generatedPassword = generateSecurePassword();
-          console.log('Generated secure password for Google user:', generatedPassword.substring(0, 8) + '...');
           
           user = await User.create({
             name: name || 'Google User',
@@ -582,7 +567,6 @@ const socialLogin = async (req, res) => {
             role: 'guest'
           });
           
-          console.log('Google user created successfully:', user.email);
         } else {
           // Update existing user's Google ID if not set
           if (!user.socialLogins?.googleId) {
@@ -956,8 +940,9 @@ const terminateSession = async (req, res) => {
 const validateResetToken = async (req, res) => {
   try {
     const { token } = req.params;
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
     const verificationToken = await VerificationToken.findOne({
-      token,
+      token: hashedToken,
       type: 'password_reset',
       expiresAt: { $gt: new Date() }
     });
@@ -966,7 +951,7 @@ const validateResetToken = async (req, res) => {
     }
     res.status(200).json({ success: true, message: 'Valid token' });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Error validating token', error: error.message });
+    res.status(500).json({ success: false, message: 'Error processing request' });
   }
 };
 

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const listingController = require('../controllers/listing.controller');
-const { auth, optionalAuth } = require('../middlewares/auth.middleware');
+const { auth, optionalAuth, adminOnly } = require('../middlewares/auth.middleware');
 const { validateListing, validateListingUpdate } = require('../validations/listing.validation');
 const AuthorizationMiddleware = require('../middlewares/authorization.middleware');
 
@@ -61,9 +61,9 @@ router.post('/:id/wishlist', listingController.addToWishlist);
 router.delete('/:id/wishlist', listingController.removeFromWishlist);
 
 // Admin routes (admin only)
-router.get('/admin/pending', listingController.getPendingListings);
-router.patch('/admin/:id/approve', listingController.approveListing);
-router.patch('/admin/:id/reject', listingController.rejectListing);
-router.patch('/admin/:id/feature', listingController.featureListing);
+router.get('/admin/pending', adminOnly, listingController.getPendingListings);
+router.patch('/admin/:id/approve', adminOnly, listingController.approveListing);
+router.patch('/admin/:id/reject', adminOnly, listingController.rejectListing);
+router.patch('/admin/:id/feature', adminOnly, listingController.featureListing);
 
 module.exports = router;
