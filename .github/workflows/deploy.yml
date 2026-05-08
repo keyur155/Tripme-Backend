@@ -20,6 +20,11 @@ jobs:
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
             set -e
+            echo "--- Ensuring nginx upload limit ---"
+            if ! grep -q "client_max_body_size" /etc/nginx/nginx.conf; then
+              sed -i '/http {/a \    client_max_body_size 10m;' /etc/nginx/nginx.conf
+              nginx -t && systemctl reload nginx
+            fi
             echo "--- Pulling latest code ---"
             cd /var/www/tripme/Tripme-Backend
             git pull origin main
@@ -43,6 +48,11 @@ jobs:
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
             set -e
+            echo "--- Ensuring nginx upload limit ---"
+            if ! grep -q "client_max_body_size" /etc/nginx/nginx.conf; then
+              sed -i '/http {/a \    client_max_body_size 10m;' /etc/nginx/nginx.conf
+              nginx -t && systemctl reload nginx
+            fi
             echo "--- Pulling latest beta code ---"
             cd /var/www/tripme/Tripme-Backend-Beta
             git pull origin beta

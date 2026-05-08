@@ -85,7 +85,7 @@ app.use(cors(corsOptions));
 
 // ── Body parsing ───────────────────────────────────────────
 app.use(express.json({
-  limit: '1mb',
+  limit: '10mb',
   verify: (req, res, buf) => {
     // Preserve raw body for webhook signature verification
     if (req.originalUrl && req.originalUrl.startsWith('/api/payments/webhook/')) {
@@ -93,7 +93,7 @@ app.use(express.json({
     }
   }
 }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ── NoSQL Injection Sanitization ──────────────────────────
 const { mongoSanitize } = require('./middlewares/sanitize.middleware');

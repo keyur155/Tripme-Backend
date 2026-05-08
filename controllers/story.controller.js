@@ -23,9 +23,17 @@ const getAllStories = async (req, res) => {
       query.category = category;
     }
 
-    // Search filter
+    // Search filter - use regex for partial matching across title, excerpt, tags, and location
     if (search) {
-      query.$text = { $search: search };
+      const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [
+        { title: searchRegex },
+        { excerpt: searchRegex },
+        { tags: searchRegex },
+        { 'location.city': searchRegex },
+        { 'location.state': searchRegex },
+        { 'location.country': searchRegex }
+      ];
     }
 
     // Author filter
@@ -59,6 +67,78 @@ const getAllStories = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch stories'
+    });
+  }
+};
+
+// Search stories with query, category, and location filters
+const searchStories = async (req, res) => {
+  try {
+    const {
+      q = '',
+      category,
+      location,
+      page = 1,
+      limit = 12,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
+    const query = { isPublished: true };
+
+    if (q) {
+      const searchRegex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [
+        { title: searchRegex },
+        { excerpt: searchRegex },
+        { tags: searchRegex },
+        { 'location.city': searchRegex },
+        { 'location.state': searchRegex },
+        { 'location.country': searchRegex },
+        { category: searchRegex }
+      ];
+    }
+
+    if (category) {
+      query.category = category;
+    }
+
+    if (location) {
+      const locRegex = new RegExp(location.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [
+        ...(query.$or || []),
+        { 'location.city': locRegex },
+        { 'location.state': locRegex },
+        { 'location.country': locRegex }
+      ];
+    }
+
+    const sortOptions = {};
+    sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+    const stories = await Story.find(query)
+      .populate('author', 'name profileImage')
+      .sort(sortOptions)
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .exec();
+
+    const total = await Story.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        stories,
+        totalPages: Math.ceil(total / limit),
+        currentPage: Number(page),
+        total
+      }
+    });
+  } catch (error) {
+    console.error('Error searching stories:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to search stories'
     });
   }
 };
@@ -432,6 +512,7 @@ const getCategories = async (req, res) => {
 
 module.exports = {
   getAllStories,
+  searchStories,
   getFeaturedStories,
   getStoryBySlug,
   getStoryById,
