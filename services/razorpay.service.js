@@ -28,8 +28,9 @@ async function razorpayHttpRequest(endpoint, method, data) {
       'Content-Length': Buffer.byteLength(postData)
     },
     // Disable certificate verification only in development (NOT for production)
-    rejectUnauthorized: process.env.NODE_ENV === 'production'
+    // rejectUnauthorized: process.env.NODE_ENV === 'production'
   };
+  
 
   return new Promise((resolve, reject) => {
     const req = https.request(options, (res) => {
