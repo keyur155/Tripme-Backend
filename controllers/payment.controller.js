@@ -136,32 +136,35 @@ const processPayment = async (req, res) => {
       currency: booking.currency
     });
     
-    // Apply coupon if provided
+    // Apply coupon if provided (using atomic operation to prevent race conditions)
     let coupon = null;
     if (couponCode) {
-      coupon = await Coupon.findOne({ 
-        code: couponCode.toUpperCase(), 
-        isActive: true, 
-        validFrom: { $lte: new Date() }, 
-        validTo: { $gte: new Date() } 
-      });
+      // Atomic findOneAndUpdate prevents double-redemption race condition
+      coupon = await Coupon.findOneAndUpdate(
+        { 
+          code: couponCode.toUpperCase(), 
+          isActive: true, 
+          validFrom: { $lte: new Date() }, 
+          validTo: { $gte: new Date() },
+          'usedBy.user': { $ne: req.user._id },
+          $expr: { $lt: ['$usedCount', '$maxUses'] }
+        },
+        {
+          $inc: { usedCount: 1 },
+          $push: { usedBy: { user: req.user._id, usedAt: new Date() } }
+        },
+        { new: true }
+      );
       
       if (coupon) {
-        const hasUsed = coupon.usedBy.some(usage => usage.user.toString() === req.user.id);
-        if (!hasUsed) {
         if (coupon.discountType === 'percentage') {
-          // Apply discount to subtotal, not total amount
           const discount = (booking.subtotal * coupon.amount) / 100;
           const maxDiscount = coupon.maxDiscount || discount;
           booking.discountAmount = Math.min(discount, maxDiscount);
         } else {
           booking.discountAmount = coupon.amount;
         }
-          booking.couponApplied = coupon._id;
-          coupon.usedCount += 1;
-          coupon.usedBy.push({ user: req.user.id, usedAt: new Date() });
-          await coupon.save();
-        }
+        booking.couponApplied = coupon._id;
       }
     }
     
@@ -304,48 +307,14 @@ const processPayment = async (req, res) => {
   }
 };
 
-// @desc    Confirm payment (mock)
+// @desc    Confirm payment - DISABLED (payment confirmation must go through gateway verification)
 // @route   POST /api/payments/confirm/:paymentId
 // @access  Private
 const confirmPayment = async (req, res) => {
-  try {
-    const { paymentId } = req.params;
-    
-    const payment = await Payment.findById(paymentId);
-    if (!payment) {
-      return res.status(404).json({ success: false, message: 'Payment not found' });
-    }
-    
-    if (payment.user.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Not authorized' });
-    }
-    
-    // TODO: Verify payment with payment gateway
-    // For now, just confirm the payment
-    payment.status = 'completed';
-    await payment.save();
-    
-    // Update booking status to confirmed
-    if (payment.booking) {
-      const Booking = require('../models/Booking');
-      await Booking.findByIdAndUpdate(payment.booking, {
-        status: 'confirmed',
-        paymentStatus: 'paid'
-      });
-      logger.info('Booking confirmed after payment', { bookingId: payment.booking });
-    }
-    
-    res.status(200).json({ 
-      success: true, 
-      message: 'Payment confirmed successfully' 
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error confirming payment', 
-      error: error.message 
-    });
-  }
+  return res.status(410).json({
+    success: false,
+    message: 'This endpoint has been deprecated. Payment confirmation is handled via gateway webhooks and the processPayment endpoint.'
+  });
 };
 
 // @desc    Cancel payment (mock)
@@ -861,21 +830,24 @@ const stripeWebhook = async (req, res) => {
     const payload = req.rawBody || (Buffer.isBuffer(req.body) ? req.body.toString('utf8') : JSON.stringify(req.body));
     const parsedBody = Buffer.isBuffer(req.body) ? JSON.parse(payload) : req.body;
     
-    // Verify webhook signature (when real Stripe is integrated)
-    if (process.env.STRIPE_WEBHOOK_SECRET) {
-      const isValidSignature = verifyWebhookSignature(
-        payload, 
-        signature, 
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
-      
-      if (!isValidSignature) {
-        logger.warn('Invalid Stripe webhook signature');
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Invalid webhook signature' 
-        });
-      }
+    // Always verify webhook signature — reject if secret not configured
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+      logger.error('STRIPE_WEBHOOK_SECRET not configured, rejecting webhook');
+      return res.status(503).json({ success: false, message: 'Webhook verification not configured' });
+    }
+
+    const isValidSignature = verifyWebhookSignature(
+      payload, 
+      signature, 
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+    
+    if (!isValidSignature) {
+      logger.warn('Invalid Stripe webhook signature');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid webhook signature' 
+      });
     }
     
     // Log webhook for security audit
@@ -1017,8 +989,6 @@ const createRazorpayOrder = async (req, res) => {
         });
       }
     } else if (serviceId) {
-      // Customer booking a service — verify service exists but do NOT check ownership
-      // (the owner is the host, not the customer making the booking)
       const service = await Service.findById(serviceId);
       if (!service) {
         return res.status(404).json({
@@ -1026,22 +996,33 @@ const createRazorpayOrder = async (req, res) => {
           message: 'Service not found'
         });
       }
-      // Prevent the service owner from booking their own service
       if (service.user && service.user.toString() === req.user._id.toString()) {
         return res.status(403).json({
           success: false,
           message: 'You cannot book your own service'
         });
       }
-      // Amount is computed on the frontend (basePrice + extraGuests + platformFee).
-      // We trust it here; the booking controller will re-validate against service pricing.
-      if (amount == null || Number(amount) <= 0) {
+
+      // Server-side price calculation instead of trusting client amount
+      const basePrice = service.pricing?.basePrice || service.price || 0;
+      const guests = req.body.guests || 1;
+      const extraGuestPrice = service.pricing?.perPersonPrice || service.pricing?.extraGuestPrice || 0;
+      const extraGuests = guests > 1 ? guests - 1 : 0;
+      const platformFeeRate = 0.05; // 5% platform fee
+      const subtotal = basePrice + (extraGuests * extraGuestPrice);
+      const platformFee = Math.round(subtotal * platformFeeRate);
+      const serverCalculatedAmount = subtotal + platformFee;
+
+      if (amount != null && Math.abs(Number(amount) - serverCalculatedAmount) > 1) {
         return res.status(400).json({
           success: false,
-          message: 'A valid amount is required to create a service order'
+          message: 'Amount mismatch with server-calculated price',
+          expectedAmount: serverCalculatedAmount,
+          providedAmount: Number(amount)
         });
       }
-      finalAmount = Number(amount);
+
+      finalAmount = serverCalculatedAmount;
       finalCurrency = currency;
     }
     

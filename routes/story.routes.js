@@ -7,6 +7,7 @@ const AuthorizationMiddleware = require('../middlewares/authorization.middleware
 
 // Public routes
 router.get('/', storyController.getAllStories);
+router.get('/search', storyController.searchStories);
 router.get('/featured', storyController.getFeaturedStories);
 router.get('/categories', storyController.getCategories);
 router.get('/user/:userId', storyController.getUserStories);

@@ -272,6 +272,14 @@ const processPaymentAndCreateBooking = async (req, res) => {
     let hostBufferTime;
     let amount
 
+    // Enforce email verification before allowing bookings
+    if (req.user && !req.user.isVerified && !req.isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please verify your email address before making a booking'
+      });
+    }
+
     // Decide 24-hour flow strictly via bookingDuration flag to avoid misclassification when checkInDateTime is sent for daily bookings
     let is24HourBooking = bookingDuration === '24hour';
     session = await mongoose.startSession();
@@ -1610,18 +1618,13 @@ const processPaymentAndCreateBooking = async (req, res) => {
 
   } catch (error) {
     console.error('❌ ===========================================');
-    console.error('❌ Error in processPaymentAndCreateBooking:', error);
-    console.error('❌ Error message:', error.message);
-    console.error('❌ Error stack:', error.stack);
-    console.error('❌ Error details:', JSON.stringify(error, null, 2));
-    console.error('❌ ===========================================');
+    const { logger } = require('../config/logger');
+    logger.error('Error in processPaymentAndCreateBooking', { error: error.message });
 
-    // If it's a validation error, return 400 instead of 500
     if (error.name === 'ValidationError' || error.status === 400) {
       return res.status(400).json({
         success: false,
-        message: error.message || 'Validation error',
-        errors: error.errors || [error.message]
+        message: error.message || 'Validation error'
       });
     }
     if (error.message === 'IDEMPOTENCY_CONFLICT') {
@@ -2537,13 +2540,6 @@ const updateBookingStatus = async (req, res) => {
     const isGuest = userId === currentUserId;
     const isAdmin = req.user.role === 'admin' || req.user.role === 'super-admin';
 
-    console.log('🔐 Authorization check:');
-    console.log('   hostId:', hostId);
-    console.log('   userId:', userId);
-    console.log('   currentUserId:', currentUserId);
-    console.log('   isHost:', isHost);
-    console.log('   isGuest:', isGuest);
-    console.log('   isAdmin:', isAdmin);
 
     if (!isHost && !isGuest && !isAdmin) {
       console.error('❌ Not authorized to update booking');
@@ -2553,7 +2549,7 @@ const updateBookingStatus = async (req, res) => {
       });
     }
 
-    // Validate status transition
+    // Validate status transition with role-based restrictions
     const validTransitions = {
       pending: ['confirmed', 'cancelled'],
       confirmed: ['completed', 'cancelled'],
@@ -2562,10 +2558,26 @@ const updateBookingStatus = async (req, res) => {
       expired: []
     };
 
-    if (!validTransitions[booking.status].includes(status)) {
+    if (!validTransitions[booking.status] || !validTransitions[booking.status].includes(status)) {
       return res.status(400).json({
         success: false,
         message: `Cannot change status from ${booking.status} to ${status}`
+      });
+    }
+
+    // Only hosts and admins can confirm bookings — guests cannot self-confirm
+    if (status === 'confirmed' && !isHost && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the property host or an admin can confirm bookings'
+      });
+    }
+
+    // Only hosts and admins can mark bookings as completed
+    if (status === 'completed' && !isHost && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the property host or an admin can mark bookings as completed'
       });
     }
 

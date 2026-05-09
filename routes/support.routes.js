@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supportController = require('../controllers/support.controller');
-const { auth } = require('../middlewares/auth.middleware');
+const { auth, adminOnly } = require('../middlewares/auth.middleware');
 const { validateTicket, validateMessage } = require('../validations/support.validation');
 const AuthorizationMiddleware = require('../middlewares/authorization.middleware');
 
@@ -33,19 +33,19 @@ router.get('/help-articles', supportController.getHelpArticles);
 router.get('/help-articles/:id', supportController.getHelpArticleById);
 
 // Admin routes (admin only)
-router.get('/admin/tickets', supportController.getAllTickets);
-router.get('/admin/tickets/pending', supportController.getPendingTickets);
-router.get('/admin/tickets/open', supportController.getOpenTickets);
-router.patch('/admin/tickets/:id/assign', supportController.assignTicket);
-router.patch('/admin/tickets/:id/status', supportController.updateTicketStatusAdmin);
+router.get('/admin/tickets', adminOnly, supportController.getAllTickets);
+router.get('/admin/tickets/pending', adminOnly, supportController.getPendingTickets);
+router.get('/admin/tickets/open', adminOnly, supportController.getOpenTickets);
+router.patch('/admin/tickets/:id/assign', adminOnly, supportController.assignTicket);
+router.patch('/admin/tickets/:id/status', adminOnly, supportController.updateTicketStatusAdmin);
 
 // Admin FAQ and help management
-router.post('/admin/faq', supportController.createFAQ);
-router.put('/admin/faq/:id', supportController.updateFAQ);
-router.delete('/admin/faq/:id', supportController.deleteFAQ);
+router.post('/admin/faq', adminOnly, supportController.createFAQ);
+router.put('/admin/faq/:id', adminOnly, supportController.updateFAQ);
+router.delete('/admin/faq/:id', adminOnly, supportController.deleteFAQ);
 
-router.post('/admin/help-articles', supportController.createHelpArticle);
-router.put('/admin/help-articles/:id', supportController.updateHelpArticle);
-router.delete('/admin/help-articles/:id', supportController.deleteHelpArticle);
+router.post('/admin/help-articles', adminOnly, supportController.createHelpArticle);
+router.put('/admin/help-articles/:id', adminOnly, supportController.updateHelpArticle);
+router.delete('/admin/help-articles/:id', adminOnly, supportController.deleteHelpArticle);
 
 module.exports = router; 

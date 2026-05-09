@@ -81,11 +81,11 @@ const uploadImage = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Upload error:', error);
+    const { logger } = require('../config/logger');
+    logger.error('Upload error', { error: error.message });
     res.status(500).json({
       success: false,
-      message: 'Error uploading media',
-      error: error.message
+      message: 'Error uploading media'
     });
   }
 };
@@ -165,11 +165,11 @@ const uploadMultipleImages = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Multiple upload error:', error);
+    const { logger } = require('../config/logger');
+    logger.error('Multiple upload error', { error: error.message });
     res.status(500).json({
       success: false,
-      message: 'Error uploading images',
-      error: error.message
+      message: 'Error uploading images'
     });
   }
 };
@@ -188,6 +188,33 @@ const deleteImage = async (req, res) => {
       });
     }
 
+    // Verify the image belongs to the requesting user by checking if it's
+    // referenced in one of their listings or services
+    const Listing = require('../models/Listing');
+    const Service = require('../models/Service');
+
+    const userOwnsImage = await Listing.findOne({
+      host: req.user._id,
+      $or: [
+        { 'images.publicId': publicId },
+        { 'photos.publicId': publicId }
+      ]
+    }) || await Service.findOne({
+      user: req.user._id,
+      $or: [
+        { 'images.publicId': publicId },
+        { 'photos.publicId': publicId },
+        { 'media.publicId': publicId }
+      ]
+    });
+
+    if (!userOwnsImage && !req.isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only delete images that belong to your own listings or services'
+      });
+    }
+
     const result = await cloudinary.uploader.destroy(publicId);
 
     if (result.result === 'ok') {
@@ -203,11 +230,11 @@ const deleteImage = async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Delete error:', error);
+    const { logger } = require('../config/logger');
+    logger.error('Delete image error', { error: error.message });
     res.status(500).json({
       success: false,
-      message: 'Error deleting image',
-      error: error.message
+      message: 'Error deleting image'
     });
   }
 };

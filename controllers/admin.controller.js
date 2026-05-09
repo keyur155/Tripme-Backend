@@ -2263,7 +2263,6 @@ const getPaymentAuditDetails = async (req, res) => {
 const adminSignup = async (req, res) => {
   try {
     const { name, email, phone, password, confirmPassword, secretKey } = req.body;
-    console.log(secretKey);
     // Validate secret key
     if (secretKey !== process.env.ADMIN_SIGNUP_SECRET_KEY) {
       return res.status(401).json({

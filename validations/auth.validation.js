@@ -42,10 +42,10 @@ const validateRegistration = (req, res, next) => {
         'string.pattern.base': 'Please provide a valid phone number'
       }),
     role: Joi.string()
-      .valid('guest', 'host', 'admin')
+      .valid('guest')
       .default('guest')
       .messages({
-        'any.only': 'Role must be either guest, host, or admin'
+        'any.only': 'Role assignment is not permitted during registration'
       }),
     acceptTerms: Joi.boolean()
       .valid(true)

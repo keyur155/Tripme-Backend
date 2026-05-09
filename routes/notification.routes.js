@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const notificationController = require('../controllers/notification.controller');
-const { auth } = require('../middlewares/auth.middleware');
+const { auth, adminOnly } = require('../middlewares/auth.middleware');
 const AuthorizationMiddleware = require('../middlewares/authorization.middleware');
 
 // Protected routes (require authentication)
@@ -30,8 +30,8 @@ router.post('/push-token', notificationController.updatePushToken);
 router.delete('/push-token', notificationController.removePushToken);
 
 // Admin routes (admin only)
-router.post('/admin/send', notificationController.sendNotification);
-router.post('/admin/broadcast', notificationController.broadcastNotification);
-router.get('/admin/sent', notificationController.getSentNotifications);
+router.post('/admin/send', adminOnly, notificationController.sendNotification);
+router.post('/admin/broadcast', adminOnly, notificationController.broadcastNotification);
+router.get('/admin/sent', adminOnly, notificationController.getSentNotifications);
 
 module.exports = router; 

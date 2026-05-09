@@ -1,8 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const rateLimit = require('express-rate-limit');
 const { uploadImage, uploadMultipleImages, deleteImage } = require('../controllers/upload.controller');
 const { auth } = require('../middlewares/auth.middleware');
+
+// Rate limit uploads: 20 uploads per 15 minutes per user
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { success: false, message: 'Too many upload attempts. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.use(uploadLimiter);
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
