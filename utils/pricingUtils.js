@@ -65,7 +65,9 @@ async function calculate24HourPricing(params) {
     securityDeposit = 0,
     hourlyExtension = 0,
     discountAmount = 0,
-    currency = 'INR'
+    currency = 'INR',
+    nights=1
+
   } = params;
 
   // Get current fee config from database
@@ -83,10 +85,12 @@ async function calculate24HourPricing(params) {
   }
   
   // Add extra guest charges
-  if (extraGuests > 0) {
-    baseAmount += extraGuestPrice * extraGuests;
-  }
-  
+  // Extra guest cost is calculated per night (nights derived from totalHours)
+  const extraGuestCost =
+  extraGuests > 0
+    ? extraGuestPrice * extraGuests * nights
+    : 0;
+
   // Add host-set fees (excluding security deposit - it's held separately)
   const hostFees = cleaningFee + serviceFee;
   
@@ -94,7 +98,7 @@ async function calculate24HourPricing(params) {
   const extensionCost = (hourlyExtension || 0) + extraHoursCost;
   
   // Calculate subtotal for host earning (excluding security deposit)
-  const hostSubtotal = baseAmount + hostFees + extensionCost - discountAmount;
+  const hostSubtotal = baseAmount + extraGuestCost + hostFees + extensionCost - discountAmount;
   
   // Calculate total subtotal (including security deposit for customer payment)
   const totalSubtotal = hostSubtotal + securityDeposit;
@@ -131,7 +135,7 @@ async function calculate24HourPricing(params) {
     baseAmount: toTwoDecimals(baseAmount),
     totalHours,
     extraGuests,
-    extraGuestCost: toTwoDecimals(extraGuestPrice * extraGuests),
+    extraGuestCost: toTwoDecimals(extraGuestCost), // Use calculated value (includes nights)
     
     // Host-set fees
     cleaningFee: toTwoDecimals(cleaningFee),
@@ -231,6 +235,13 @@ async function calculatePricingBreakdown(params) {
     totalHours
   } = params;
 
+
+  console.log({
+  extraGuestPrice,
+  extraGuests,
+  nights
+});
+
   // Use 24-hour pricing for new system
   if (bookingType === '24hour' || totalHours) {
     return await calculate24HourPricing(params);
@@ -243,10 +254,20 @@ async function calculatePricingBreakdown(params) {
   let baseAmount = basePrice * nights;
   
   // Add extra guest charges
-  if (extraGuests > 0) {
-    baseAmount += extraGuestPrice * extraGuests * nights;
-  }
-  
+  // if (extraGuests > 0) {
+  //   baseAmount += extraGuestPrice * extraGuests * nights;
+  // }
+
+  const extraGuestCost =
+  extraGuests > 0
+    ? extraGuestPrice * extraGuests * nights
+    : 0;
+  console.log("EXTRA GUEST DEBUG", {
+  extraGuestPrice,
+  extraGuests,
+  nights,
+  extraGuestCost
+});
   // Add host-set fees (excluding security deposit - it's held separately)
   const hostFees = cleaningFee + serviceFee;
   
@@ -254,7 +275,7 @@ async function calculatePricingBreakdown(params) {
   const extensionCost = hourlyExtension || 0;
   
   // Calculate subtotal for host earning (excluding security deposit)
-  const hostSubtotal = baseAmount + hostFees + extensionCost - discountAmount;
+  const hostSubtotal = baseAmount +  extraGuestCost + hostFees + extensionCost - discountAmount;
   
   // Calculate total subtotal (including security deposit for customer payment)
   const totalSubtotal = hostSubtotal + securityDeposit;
@@ -291,7 +312,8 @@ async function calculatePricingBreakdown(params) {
     baseAmount: toTwoDecimals(baseAmount),
     nights,
     extraGuests,
-    extraGuestCost: toTwoDecimals(extraGuestPrice * extraGuests * nights),
+    // extraGuestCost: toTwoDecimals(),
+    extraGuestCost: toTwoDecimals(extraGuestCost),
     
     // Host-set fees
     cleaningFee: toTwoDecimals(cleaningFee),

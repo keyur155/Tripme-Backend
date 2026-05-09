@@ -249,7 +249,7 @@ const calculatePricing = async (req, res) => {
       nights: is24HourBooking ? 1 : nights,
       totalHours: is24HourBooking ? (pricingParams.totalHours || 24) : undefined,
       extraGuests,
-      extraGuestCost,
+      extraGuestCost: pricingBreakdown.extraGuestCost, // Use backend-calculated value (includes nights)
       cleaningFee: pricingBreakdown.cleaningFee,
       serviceFee: pricingBreakdown.serviceFee,
       securityDeposit: pricingBreakdown.securityDeposit,
