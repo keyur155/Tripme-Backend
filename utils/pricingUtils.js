@@ -235,13 +235,6 @@ async function calculatePricingBreakdown(params) {
     totalHours
   } = params;
 
-
-  console.log({
-  extraGuestPrice,
-  extraGuests,
-  nights
-});
-
   // Use 24-hour pricing for new system
   if (bookingType === '24hour' || totalHours) {
     return await calculate24HourPricing(params);
@@ -262,12 +255,8 @@ async function calculatePricingBreakdown(params) {
   extraGuests > 0
     ? extraGuestPrice * extraGuests * nights
     : 0;
-  console.log("EXTRA GUEST DEBUG", {
-  extraGuestPrice,
-  extraGuests,
-  nights,
-  extraGuestCost
-});
+  
+
   // Add host-set fees (excluding security deposit - it's held separately)
   const hostFees = cleaningFee + serviceFee;
   
