@@ -115,6 +115,10 @@ const serviceSchema = new mongoose.Schema({
         message: 'Media URL must be a valid HTTP/HTTPS URL'
       }
     },
+    publicId: {
+      type: String,
+      required: false
+    },
     type: {
       type: String,
       enum: ['image', 'video'],

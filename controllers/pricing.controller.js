@@ -147,19 +147,19 @@ const calculatePricing = async (req, res) => {
     const totalHours = is24HourBooking ? (24 + (extensionHours || 0)) : undefined;
 
     // Determine base price
-    // - 24-hour booking → use basePrice24Hour if configured (> 0), else regular basePrice
-    // - Late check-in (after 4 PM) for multi-night → same logic
+    // - For non-shared properties: ALWAYS use regular basePrice (no surcharge, anytime check-in is built-in)
+    // - For shared properties: use basePrice24Hour when 24-hour booking or late check-in
     // - Regular daily → use standard basePrice
-    //
-    // IMPORTANT: basePrice24Hour defaults to 0 in the DB schema (falsy!).
-    // We must check > 0 (not just truthy) to know if the host has configured a 24hr price.
-    // Also honour enable24HourBooking flag: if that flag is true, always use 24hr flow.
     const has24HourPrice = property.pricing?.basePrice24Hour > 0;
     const use24HourFlow = property.enable24HourBooking || has24HourPrice;
+    const isSharedProperty = property.placeType === 'shared';
 
     let basePrice;
-    if ((is24HourBooking || isLateCheckIn) && use24HourFlow) {
-      // Use basePrice24Hour when explicitly set, otherwise fall back to regular basePrice
+    if (!isSharedProperty) {
+      // Non-shared: always use regular basePrice (no extra anytime charge)
+      basePrice = property.pricing?.basePrice || 0;
+    } else if ((is24HourBooking || isLateCheckIn) && use24HourFlow) {
+      // Shared: use basePrice24Hour when explicitly set, otherwise fall back to regular basePrice
       basePrice = has24HourPrice
         ? property.pricing.basePrice24Hour
         : property.pricing?.basePrice || 0;

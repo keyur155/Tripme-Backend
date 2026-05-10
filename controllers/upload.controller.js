@@ -1,5 +1,8 @@
 const cloudinary = require('../config/cloudinary');
 const { Readable } = require('stream');
+const Property = require('../models/Property');
+const Service = require('../models/Service');
+
 
 // @desc    Upload single image
 // @route   POST /api/upload/image
@@ -188,44 +191,47 @@ const deleteImage = async (req, res) => {
       });
     }
 
-    // Verify the image belongs to the requesting user by checking if it's
-    // referenced in one of their listings or services
-    const Listing = require('../models/Listing');
-    const Service = require('../models/Service');
-
-    const userOwnsImage = await Listing.findOne({
-      host: req.user._id,
-      $or: [
-        { 'images.publicId': publicId },
-        { 'photos.publicId': publicId }
-      ]
+    // To protect data, we only deny deletion if the image is associated with 
+    // a property or service belonging to ANOTHER user.
+    // If it's orphaned (not in DB) or belongs to the current user, we allow deletion.
+    const belongsToOthers = await Property.findOne({
+      host: { $ne: req.user.id },
+      'images.publicId': publicId
     }) || await Service.findOne({
-      user: req.user._id,
-      $or: [
-        { 'images.publicId': publicId },
-        { 'photos.publicId': publicId },
-        { 'media.publicId': publicId }
-      ]
+      provider: { $ne: req.user.id },
+      'media.publicId': publicId
     });
 
-    if (!userOwnsImage && !req.isAdmin) {
+
+    if (belongsToOthers && req.user.role !== 'admin') {
       return res.status(403).json({
         success: false,
-        message: 'You can only delete images that belong to your own listings or services'
+        message: 'You cannot delete images that belong to other users'
       });
     }
 
     const result = await cloudinary.uploader.destroy(publicId);
 
-    if (result.result === 'ok') {
+    if (result.result === 'ok' || result.result === 'not found') {
+      // Also remove from DB
+      await Property.updateMany(
+        { 'images.publicId': publicId },
+        { $pull: { images: { publicId: publicId } } }
+      );
+      
+      await Service.updateMany(
+        { 'media.publicId': publicId },
+        { $pull: { media: { publicId: publicId } } }
+      );
+
       res.status(200).json({
         success: true,
-        message: 'Image deleted successfully'
+        message: 'Image deleted successfully from Cloudinary and Database'
       });
     } else {
       res.status(400).json({
         success: false,
-        message: 'Failed to delete image'
+        message: 'Failed to delete image from Cloudinary'
       });
     }
 

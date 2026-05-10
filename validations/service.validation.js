@@ -42,7 +42,8 @@ const validateService = (req, res, next) => {
       Joi.object({
         url: Joi.string().uri().required(),
         type: Joi.string().valid('image', 'video').required(),
-        caption: Joi.string().max(200).optional().allow('')
+        caption: Joi.string().max(200).optional().allow(''),
+        publicId: Joi.string().optional()
       })
     ).optional(),
     status: Joi.string()
@@ -106,7 +107,8 @@ const validateServiceUpdate = (req, res, next) => {
       Joi.object({
         url: Joi.string().uri().optional(),
         type: Joi.string().valid('image', 'video').optional(),
-        caption: Joi.string().max(200).optional().allow('')
+        caption: Joi.string().max(200).optional().allow(''),
+        publicId: Joi.string().optional()
       })
     ).optional(),
     status: Joi.string()

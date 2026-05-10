@@ -5,6 +5,8 @@ const Review = require('../models/Review');
 const Wishlist = require('../models/Wishlist');
 const Notification = require('../models/Notification');
 const slugify = require('slugify');
+const cloudinary = require('../config/cloudinary');
+
 
 
 // helper function to count badges 
@@ -240,12 +242,26 @@ const createListing = async (req, res) => {
           eighteenHours: 0.75
         }
       },
-      enable24HourBooking: enable24HourBooking || false,
       images: transformedImages,
       seo: {
         slug
       }
     };
+
+    // ── Anytime Check-in Enforcement based on placeType ──
+    // Non-shared properties: force anytime check-in ON at basePrice (no surcharge)
+    // Shared properties: allow host to control toggle and custom price
+    const effectivePlaceType = listingData.placeType || 'entire';
+    if (effectivePlaceType !== 'shared') {
+      // Non-shared: always enable, price = basePrice (no extra charge)
+      listingData.enable24HourBooking = true;
+      if (listingData.pricing) {
+        listingData.pricing.basePrice24Hour = listingData.pricing.basePrice;
+      }
+    } else {
+      // Shared: respect host's choice
+      listingData.enable24HourBooking = enable24HourBooking || false;
+    }
 
     const listing = await Property.create(listingData);
 
@@ -691,10 +707,34 @@ const updateListing = async (req, res) => {
         return image; // If already an object, keep as is
       });
     } else if (updateData.images && Array.isArray(updateData.images) && updateData.images.length === 0) {
-      // If empty array is sent, remove it from updateData to avoid overwriting existing images
-      console.log('Empty images array received, removing from update data to preserve existing images');
-      delete updateData.images;
+      // If empty array is sent, we allow it (frontend should handle validation if at least one is required)
+      console.log('Empty images array received, will clear existing images in DB');
     }
+
+    // Logic to delete removed images from Cloudinary
+    if (updateData.images && Array.isArray(updateData.images)) {
+      const currentPublicIds = listing.images
+        .map(img => img.publicId)
+        .filter(id => id && !id.startsWith('temp_'));
+        
+      const newPublicIds = updateData.images
+        .map(img => img.publicId)
+        .filter(id => id);
+        
+      const idsToDelete = currentPublicIds.filter(id => !newPublicIds.includes(id));
+      
+      if (idsToDelete.length > 0) {
+        console.log('Deleting images from Cloudinary:', idsToDelete);
+        for (const publicId of idsToDelete) {
+          try {
+            await cloudinary.uploader.destroy(publicId);
+          } catch (err) {
+            console.error(`Failed to delete image ${publicId} from Cloudinary:`, err);
+          }
+        }
+      }
+    }
+
     
     console.log('Processed update data:', {
       hasImages: !!updateData.images,
@@ -710,6 +750,21 @@ const updateListing = async (req, res) => {
         slug: slugify(updateData.title, { lower: true })
       };
     }
+
+    // ── Anytime Check-in Enforcement based on placeType ──
+    // Determine the effective placeType (from update payload or existing listing)
+    const effectivePlaceType = updateData.placeType || listing.placeType || 'entire';
+    if (effectivePlaceType !== 'shared') {
+      // Non-shared: force anytime check-in ON, price = basePrice (no surcharge)
+      updateData.enable24HourBooking = true;
+      const effectiveBasePrice = updateData.pricing?.basePrice || listing.pricing?.basePrice || 0;
+      if (updateData.pricing) {
+        updateData.pricing.basePrice24Hour = effectiveBasePrice;
+      } else {
+        updateData.pricing = { ...listing.pricing?.toObject?.() || listing.pricing, basePrice24Hour: effectiveBasePrice };
+      }
+    }
+    // For shared: let whatever the host sent through (no override)
 
     const updatedListing = await Property.findByIdAndUpdate(
       id,

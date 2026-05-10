@@ -80,6 +80,14 @@ const preValidateBooking = async (req, res) => {
       isLateCheckIn,
     } = req.body;
 
+    // Enforce email verification before allowing bookings (check here so it fails before payment)
+    if (req.user && !req.user.isVerified && !req.isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please verify your email address before making a booking'
+      });
+    }
+
     const actualListingId = listingId || propertyId;
 
     if (actualListingId && serviceId) {
