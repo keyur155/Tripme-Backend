@@ -5,7 +5,7 @@ const notificationSchema = new Schema({
   user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   type: {
     type: String,
-    enum: ['booking', 'review', 'payment', 'system', 'admin'],
+    enum: ['booking', 'review', 'payment', 'system', 'admin', 'service'],
     required: true
   },
   title: { 
@@ -19,7 +19,7 @@ const notificationSchema = new Schema({
     maxlength: [500, 'Notification message cannot exceed 500 characters']
   },
   relatedEntity: {
-    type: { type: String, enum: ['Booking', 'Property', 'Review'] },
+    type: { type: String, enum: ['Booking', 'Property', 'Review', 'Service'] },
     id: { type: Schema.Types.ObjectId }
   },
   isRead: { type: Boolean, default: false },

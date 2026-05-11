@@ -18,10 +18,7 @@ router.get('/stats/overview', serviceController.getServiceStats);
 router.get('/stats/revenue', serviceController.getServiceRevenue);
 router.get('/stats/popular', serviceController.getPopularServices);
 
-// Admin routes (admin only)
-router.get('/admin/pending', serviceController.getPendingServices);
-router.patch('/admin/:id/approve', serviceController.approveService);
-router.patch('/admin/:id/reject', serviceController.rejectService);
+// No administrative routes here, moved below auth middleware
 
 // Public parameterized routes
 router.get('/:id', optionalAuth, serviceController.getService);
@@ -32,6 +29,12 @@ router.get('/:id/rating', serviceController.getServiceRating);
 
 // Protected routes (require authentication) - continuation
 router.use(auth);
+
+// Admin routes (admin only)
+router.get('/admin/all', AuthorizationMiddleware.isAdmin, serviceController.getAdminServices);
+router.get('/admin/pending', AuthorizationMiddleware.isAdmin, serviceController.getPendingServices);
+router.patch('/admin/:id/approve', AuthorizationMiddleware.isAdmin, serviceController.approveService);
+router.patch('/admin/:id/reject', AuthorizationMiddleware.isAdmin, serviceController.rejectService);
 
 // The routes below were moved to the public section above
 // router.get('/:id', serviceController.getService);

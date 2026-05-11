@@ -2,6 +2,8 @@ const Service = require('../models/Service');
 const User = require('../models/User');
 const Booking = require('../models/Booking');
 const Review = require('../models/Review');
+const Notification = require('../models/Notification');
+const mongoose = require('mongoose');
 const slugify = require('slugify');
 
 // @desc    Create new service
@@ -124,7 +126,10 @@ const getServices = async (req, res) => {
       sortOrder = 'desc'
     } = req.query;
 
-    const query = { status: 'published' };
+    const query = { 
+      status: 'published',
+      approvalStatus: 'approved' 
+    };
 
     // Search by title or description
     if (search) {
@@ -265,7 +270,24 @@ const getService = async (req, res) => {
 const updateService = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    let updateData = req.body;
+
+    // Prevent non-admins from updating approvalStatus and enforce approval for publishing
+    if (req.user.role !== 'admin') {
+      const { approvalStatus, approvedBy, approvedAt, rejectionReason, ...rest } = updateData;
+      updateData = rest;
+
+      // If host is trying to publish, check if approved
+      if (updateData.status === 'published' || updateData.isPublished === true) {
+        const service = await Service.findById(id);
+        if (service && service.approvalStatus !== 'approved') {
+          // Instead of failing with 403, automatically submit for approval
+          updateData.status = 'draft';
+          updateData.isPublished = false;
+          updateData.approvalStatus = 'pending';
+        }
+      }
+    }
 
     const service = await Service.findById(id);
 
@@ -712,6 +734,307 @@ const getServiceStats = async (req, res) => {
   }
 };
 
+// @desc    Update service status (Publish/Unpublish)
+// @route   PATCH /api/services/:id/status
+// @access  Private (Provider only)
+const updateServiceStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const service = await Service.findById(id);
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Service not found'
+      });
+    }
+
+    if (service.provider.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to update this service'
+      });
+    }
+
+    if (status === 'published') {
+      // If trying to publish, check if approved
+      if (service.approvalStatus !== 'approved') {
+        // Submit for approval if not already pending/approved
+        service.approvalStatus = 'pending';
+        service.status = 'draft';
+        await service.save();
+        return res.status(200).json({
+          success: true,
+          message: 'Service submitted for admin approval. It will go live once approved.',
+          data: { service }
+        });
+      }
+      service.status = 'published';
+      service.isPublished = true;
+    } else {
+      service.status = status;
+      if (status !== 'published') {
+        service.isPublished = false;
+      }
+    }
+
+    await service.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Service status updated to ${status}`,
+      data: { service }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error updating service status',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update service visibility
+// @route   PATCH /api/services/:id/visibility
+// @access  Private (Provider only)
+const updateServiceVisibility = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isPublished } = req.body;
+
+    const service = await Service.findById(id);
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Service not found'
+      });
+    }
+
+    if (service.provider.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to update this service'
+      });
+    }
+
+    if (isPublished && service.approvalStatus !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        message: 'Service must be approved by admin before it can be published'
+      });
+    }
+
+    service.isPublished = isPublished;
+    service.status = isPublished ? 'published' : 'draft';
+    await service.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Service visibility updated`,
+      data: { service }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error updating service visibility',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all services (Admin only)
+// @route   GET /api/services/admin/all
+// @access  Private (Admin only)
+const getAdminServices = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      status,
+      approvalStatus
+    } = req.query;
+
+    const query = {};
+
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    if (approvalStatus && approvalStatus !== 'all') {
+      query.approvalStatus = approvalStatus;
+    }
+
+    const services = await Service.find(query)
+      .populate('provider', 'name email profileImage')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(Number(limit));
+
+    const total = await Service.countDocuments(query);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        services,
+        pagination: {
+          total,
+          page: Number(page),
+          limit: Number(limit),
+          pages: Math.ceil(total / limit)
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching all services',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get pending services (Admin only)
+// @route   GET /api/services/admin/pending
+// @access  Private (Admin only)
+const getPendingServices = async (req, res) => {
+  try {
+    const services = await Service.find({ approvalStatus: 'pending' })
+      .populate('provider', 'name email profileImage')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      data: { services }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching pending services',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Approve service (Admin only)
+// @route   PATCH /api/services/admin/:id/approve
+// @access  Private (Admin only)
+const approveService = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { approvalReason } = req.body;
+
+    const service = await Service.findById(id);
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Service not found'
+      });
+    }
+
+    service.approvalStatus = 'approved';
+    service.approvedBy = req.user.id;
+    service.approvedAt = new Date();
+    if (approvalReason) {
+      service.approvalReason = approvalReason;
+    }
+
+    await service.save();
+
+    // Notify provider
+    await Notification.create({
+      user: service.provider,
+      type: 'service',
+      title: 'Service Approved',
+      message: `Your service "${service.title}" has been approved by admin.`,
+      relatedEntity: {
+        type: 'Service',
+        id: service._id
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Service approved successfully',
+      data: { service }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error approving service',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Reject service (Admin only)
+// @route   PATCH /api/services/admin/:id/reject
+// @access  Private (Admin only)
+const rejectService = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rejectionReason } = req.body;
+
+    if (!rejectionReason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required'
+      });
+    }
+
+    const service = await Service.findById(id);
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Service not found'
+      });
+    }
+
+    service.approvalStatus = 'rejected';
+    service.status = 'draft'; // Move back to draft
+    service.rejectionReason = rejectionReason;
+
+    await service.save();
+
+    // Notify provider
+    await Notification.create({
+      user: service.provider,
+      type: 'service',
+      title: 'Service Rejected',
+      message: `Your service "${service.title}" was rejected. Reason: ${rejectionReason}`,
+      relatedEntity: {
+        type: 'Service',
+        id: service._id
+      },
+      metadata: { rejectionReason }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Service rejected',
+      data: { service }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error rejecting service',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createService,
   getServices,
@@ -724,7 +1047,13 @@ module.exports = {
   getFeaturedServices,
   getSimilarServices,
   getServicesByProvider,
-  getServiceStats
+  getServiceStats,
+  getAdminServices,
+  updateServiceStatus,
+  updateServiceVisibility,
+  getPendingServices,
+  approveService,
+  rejectService
 };
 
 // --- STUBS FOR UNIMPLEMENTED ROUTE HANDLERS ---

@@ -149,6 +149,30 @@ const serviceSchema = new mongoose.Schema({
     enum: ['draft', 'published', 'suspended', 'deleted'],
     default: 'draft'
   },
+  approvalStatus: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected', null],
+    default: null
+  },
+  isPublished: {
+    type: Boolean,
+    default: false
+  },
+  approvedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  approvedAt: {
+    type: Date
+  },
+  approvalReason: {
+    type: String,
+    maxlength: [500, 'Approval reason cannot exceed 500 characters']
+  },
+  rejectionReason: {
+    type: String,
+    maxlength: [500, 'Rejection reason cannot exceed 500 characters']
+  },
   seo: {
     metaTitle: String,
     metaDescription: String,
