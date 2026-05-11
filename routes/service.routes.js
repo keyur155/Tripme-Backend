@@ -13,13 +13,6 @@ router.get('/categories', serviceController.getServiceCategories);
 // Protected routes (require authentication)
 router.get('/my-services', auth, serviceController.getMyServices);
 
-// Service statistics and analytics (Move above :id to avoid shadowing)
-router.get('/stats/overview', serviceController.getServiceStats);
-router.get('/stats/revenue', serviceController.getServiceRevenue);
-router.get('/stats/popular', serviceController.getPopularServices);
-
-// No administrative routes here, moved below auth middleware
-
 // Public parameterized routes
 router.get('/:id', optionalAuth, serviceController.getService);
 router.get('/:id/availability', serviceController.getServiceAvailability);
@@ -27,8 +20,14 @@ router.get('/:id/similar', serviceController.getSimilarServices);
 router.get('/:id/reviews', serviceController.getServiceReviews);
 router.get('/:id/rating', serviceController.getServiceRating);
 
-// Protected routes (require authentication) - continuation
+// Protected routes (require authentication)
 router.use(auth);
+
+// Service statistics and analytics
+router.get('/stats/overview', serviceController.getServiceStats);
+router.get('/stats/revenue', serviceController.getServiceRevenue);
+router.get('/stats/popular', serviceController.getPopularServices);
+
 
 // Admin routes (admin only)
 router.get('/admin/all', AuthorizationMiddleware.isAdmin, serviceController.getAdminServices);

@@ -72,6 +72,15 @@ const getUserProfile = async (req, res) => {
 // @access  Private
 const becomeHost = async (req, res) => {
   try {
+    // Admins don't need to become hosts — they already have full access
+    if (req.isAdmin || req.user.role === 'admin') {
+      return res.status(200).json({
+        success: true,
+        message: 'Admin users already have host privileges',
+        data: { user: req.user }
+      });
+    }
+
     // req.user is already the user object from auth middleware
     // Get the full user document to ensure we have all fields
     const userId = req.user._id || req.user.id;
@@ -90,6 +99,7 @@ const becomeHost = async (req, res) => {
         message: 'User not found'
       });
     }
+
 
     // Check if user is already a host
     if (user.role === 'host') {

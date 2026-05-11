@@ -25,10 +25,10 @@ const createService = async (req, res) => {
     } = req.body;
 
     // Check if user is a service provider or admin
-    if (req.user.role !== 'host' && req.user.role !== 'admin') {
+    if (req.user.role !== 'host' && !req.isAdmin && req.user.role !== 'admin') {
       return res.status(403).json({
         success: false,
-        message: 'Only service providers can create services'
+        message: 'Only service providers and admins can create services'
       });
     }
 
