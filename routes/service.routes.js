@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const serviceController = require('../controllers/service.controller');
-const { auth } = require('../middlewares/auth.middleware');
+const { auth, optionalAuth } = require('../middlewares/auth.middleware');
 const { validateService, validateServiceUpdate } = require('../validations/service.validation');
 const AuthorizationMiddleware = require('../middlewares/authorization.middleware');
 
@@ -11,13 +11,31 @@ router.get('/search', serviceController.searchServices);
 router.get('/categories', serviceController.getServiceCategories);
 
 // Protected routes (require authentication)
+router.get('/my-services', auth, serviceController.getMyServices);
+
+// Service statistics and analytics (Move above :id to avoid shadowing)
+router.get('/stats/overview', serviceController.getServiceStats);
+router.get('/stats/revenue', serviceController.getServiceRevenue);
+router.get('/stats/popular', serviceController.getPopularServices);
+
+// Admin routes (admin only)
+router.get('/admin/pending', serviceController.getPendingServices);
+router.patch('/admin/:id/approve', serviceController.approveService);
+router.patch('/admin/:id/reject', serviceController.rejectService);
+
+// Public parameterized routes
+router.get('/:id', optionalAuth, serviceController.getService);
+router.get('/:id/availability', serviceController.getServiceAvailability);
+router.get('/:id/similar', serviceController.getSimilarServices);
+router.get('/:id/reviews', serviceController.getServiceReviews);
+router.get('/:id/rating', serviceController.getServiceRating);
+
+// Protected routes (require authentication) - continuation
 router.use(auth);
 
-// Place /my-services BEFORE any parameterized routes to avoid collision
-router.get('/my-services', serviceController.getMyServices);
-
-router.get('/:id', serviceController.getService);
-router.get('/:id/availability', serviceController.getServiceAvailability);
+// The routes below were moved to the public section above
+// router.get('/:id', serviceController.getService);
+// router.get('/:id/availability', serviceController.getServiceAvailability);
 router.put('/:id/availability', AuthorizationMiddleware.isServiceProvider, serviceController.updateServiceAvailability);
 
 // Service CRUD operations
@@ -37,19 +55,5 @@ router.patch('/:id/visibility', AuthorizationMiddleware.isServiceProvider, servi
 // Service bookings and orders
 router.get('/:id/bookings', serviceController.getServiceBookings);
 router.post('/:id/book', serviceController.bookService);
-
-// Service statistics and analytics
-router.get('/stats/overview', serviceController.getServiceStats);
-router.get('/stats/revenue', serviceController.getServiceRevenue);
-router.get('/stats/popular', serviceController.getPopularServices);
-
-// Service reviews and ratings
-router.get('/:id/reviews', serviceController.getServiceReviews);
-router.get('/:id/rating', serviceController.getServiceRating);
-
-// Admin routes (admin only)
-router.get('/admin/pending', serviceController.getPendingServices);
-router.patch('/admin/:id/approve', serviceController.approveService);
-router.patch('/admin/:id/reject', serviceController.rejectService);
 
 module.exports = router; 

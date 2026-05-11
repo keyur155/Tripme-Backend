@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Property = require('../models/Property');
 const Service = require('../models/Service');
@@ -424,13 +425,25 @@ const getDashboardStats = async (req, res) => {
       });
       const completedBookings = await Booking.countDocuments({ 
         host: userId, 
-        status: 'completed' 
+        status: 'confirmed' 
       });
 
       const totalEarnings = await Booking.aggregate([
-        { $match: { host: userId, status: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+        { $match: {
+          host:  new mongoose.Types.ObjectId(userId),
+          status: 'confirmed'
+        } },
+        { $group: {
+            _id: null,
+            total: {
+              $sum: '$pricingBreakdown.hostBreakdown.hostEarning'
+            }
+          }
+        } 
+        // { $group: { _id: null, total: { $sum: 'pricingBreakdown.hostBreakdown.hostEarning' } } }
       ]);
+
+   
 
       // Calculate occupancy rate based on current bookings
       const currentDate = new Date();
@@ -696,7 +709,7 @@ const getUserAnalytics = async (req, res) => {
     if (user.role === 'host') {
       // Host analytics
       const monthlyBookings = await Booking.aggregate([
-        { $match: { host: userId } },
+        { $match: { host: new mongoose.Types.ObjectId(userId) } },
         {
           $group: {
             _id: {
@@ -704,7 +717,7 @@ const getUserAnalytics = async (req, res) => {
               month: { $month: '$createdAt' }
             },
             count: { $sum: 1 },
-            revenue: { $sum: '$totalAmount' }
+            revenue: { $sum: '$pricingBreakdown.hostBreakdown.hostEarning' }
           }
         },
         { $sort: { '_id.year': -1, '_id.month': -1 } },
@@ -712,7 +725,7 @@ const getUserAnalytics = async (req, res) => {
       ]);
 
       const bookingStatusDistribution = await Booking.aggregate([
-        { $match: { host: userId } },
+        { $match: { host: new mongoose.Types.ObjectId(userId) } },
         {
           $group: {
             _id: '$status',
@@ -722,7 +735,7 @@ const getUserAnalytics = async (req, res) => {
       ]);
 
       const topListings = await Property.aggregate([
-        { $match: { host: userId } },
+        { $match: { host: new mongoose.Types.ObjectId(userId) } },
         {
           $lookup: {
             from: 'bookings',

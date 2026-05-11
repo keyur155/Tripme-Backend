@@ -18,16 +18,6 @@ router.get('/locations', listingController.getPopularLocations);
 router.get('/my-listings', auth, listingController.getMyListings);
 
 // Public parameterized routes - Place these before auth middleware
-router.get('/:id', optionalAuth, listingController.getListing);
-router.get('/:id/similar', listingController.getSimilarListings);
-router.get('/:id/reviews', listingController.getListingReviews);
-router.get('/:id/rating', listingController.getListingRating);
-
-// Protected routes (require authentication)
-router.use(auth);
-
-
-
 // Listing CRUD operations - Place specific routes before parameterized routes
 router.post('/', validateListing, listingController.createListing);
 router.get('/wishlist', listingController.getWishlistedListings);
@@ -36,6 +26,15 @@ router.get('/stats/revenue', listingController.getListingRevenue);
 router.get('/stats/views', listingController.getListingViews);
 router.get('/host/dashboard', listingController.getHostDashboard);
 router.get('/host/performance', listingController.getHostPerformance);
+
+// Public parameterized routes - Place these before auth middleware
+router.get('/:id', optionalAuth, listingController.getListing);
+router.get('/:id/similar', listingController.getSimilarListings);
+router.get('/:id/reviews', listingController.getListingReviews);
+router.get('/:id/rating', listingController.getListingRating);
+
+// Protected routes (require authentication)
+router.use(auth);
 
 // Protected parameterized routes
 router.put('/:id', AuthorizationMiddleware.isPropertyHost, validateListingUpdate, listingController.updateListing);

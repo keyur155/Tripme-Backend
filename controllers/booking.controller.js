@@ -2043,6 +2043,21 @@ const getHostBookings = async (req, res) => {
 
     const total = await Booking.countDocuments(query);
 
+    const totalEarnings = await Booking.aggregate([
+            { $match: {
+              host:  new mongoose.Types.ObjectId(req.user._id),
+              status: 'confirmed'
+            } },
+            { $group: {
+                _id: null,
+                total: {
+                  $sum: '$pricingBreakdown.hostBreakdown.hostEarning'
+                }
+              }
+            } 
+            // { $group: { _id: null, total: { $sum: 'pricingBreakdown.hostBreakdown.hostEarning' } } }
+          ]);
+
     // Map listing images to URLs for frontend compatibility
     const bookingsWithImageUrls = bookings.map(booking => {
       const obj = booking.toObject();
@@ -2064,7 +2079,8 @@ const getHostBookings = async (req, res) => {
           totalPages: Math.ceil(total / limit),
           totalItems: total,
           itemsPerPage: limit
-        }
+        },
+        totalEarnings
       }
     });
   } catch (error) {

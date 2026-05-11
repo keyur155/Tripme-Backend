@@ -496,8 +496,15 @@ const getServiceAvailability = async (req, res) => {
   try {
     const { id } = req.params;
     const { startDate, endDate } = req.query;
-    console.log(id);
-    const service = await Service.findById(id);
+    let service;
+    if (id.match(/^[0-9a-fA-F]{24}$/)) {
+      // Search by ObjectId
+      service = await Service.findById(id);
+    } else {
+      // Search by slug
+      service = await Service.findOne({ 'seo.slug': id });
+    }
+
     if (!service) {
       return res.status(404).json({
         success: false,
@@ -566,7 +573,15 @@ const getSimilarServices = async (req, res) => {
     const { id } = req.params;
     const { limit = 4 } = req.query;
 
-    const service = await Service.findById(id);
+    let service;
+    if (id.match(/^[0-9a-fA-F]{24}$/)) {
+      // Search by ObjectId
+      service = await Service.findById(id);
+    } else {
+      // Search by slug
+      service = await Service.findOne({ 'seo.slug': id });
+    }
+
     if (!service) {
       return res.status(404).json({
         success: false,
@@ -649,7 +664,7 @@ const getServiceStats = async (req, res) => {
     const userId = req.user.id;
 
     const stats = await Service.aggregate([
-      { $match: { provider: userId } },
+      { $match: { provider: new mongoose.Types.ObjectId(userId) } },
       {
         $group: {
           _id: '$status',
@@ -665,7 +680,7 @@ const getServiceStats = async (req, res) => {
     });
 
     const monthlyStats = await Service.aggregate([
-      { $match: { provider: userId } },
+      { $match: { provider: new mongoose.Types.ObjectId(userId) } },
       {
         $group: {
           _id: {
