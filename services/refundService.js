@@ -6,8 +6,10 @@
 const Refund = require('../models/Refund');
 const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
+const User = require('../models/User');
 const { calculateRefundBreakdown } = require('../utils/refundCalculator');
 const razorpayService = require('./razorpay.service');
+const { sendRefundInitiatedEmail } = require('../utils/sendEmail');
 
 class RefundService {
   /**
@@ -78,6 +80,21 @@ class RefundService {
       await refund.save();
       console.log('✅ Refund record created in database:', refund._id);
       console.log('📋 Refund Reference:', refund.refundReference);
+
+      // Send refund initiated email to user
+      try {
+        const user = await User.findById(booking.user._id || booking.user).select('name email');
+        if (user?.email) {
+          sendRefundInitiatedEmail(user.email, user.name, {
+            amount: refundData.amount,
+            bookingId: booking._id,
+            reason: reason,
+            refundReference: refund.refundReference,
+          }).catch(err => console.error('Error sending refund email:', err.message));
+        }
+      } catch (emailErr) {
+        console.error('Error preparing refund email:', emailErr.message);
+      }
 
       // Process refund through Razorpay if payment was made via Razorpay
       const payment = await Payment.findById(booking.payment._id);

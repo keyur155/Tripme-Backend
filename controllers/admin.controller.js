@@ -11,6 +11,7 @@ const Session = require('../models/Session');
 const KycVerification = require('../models/KycVerification');
 const jwt = require('jsonwebtoken');
 const razorpayService = require('../services/razorpay.service');
+const { sendAccountSuspendedEmail, sendAccountActivatedEmail, sendHostApprovedEmail, sendHostRejectedEmail } = require('../utils/sendEmail');
 
 // Dashboard Stats
 const getDashboardStats = async (req, res) => {
@@ -317,6 +318,15 @@ const updateUserStatus = async (req, res) => {
 
     console.log(`✅ User ${user.email} status changed from ${oldStatus} to ${accountStatus} by admin ${req.user.email}`);
 
+    // Send email notification based on new status
+    if (accountStatus === 'suspended' || accountStatus === 'banned') {
+      sendAccountSuspendedEmail(user.email, user.name, { reason: reason || 'Policy violation' })
+        .catch(err => console.error('Error sending suspension email:', err.message));
+    } else if (accountStatus === 'active' && (oldStatus === 'suspended' || oldStatus === 'banned')) {
+      sendAccountActivatedEmail(user.email, user.name)
+        .catch(err => console.error('Error sending activation email:', err.message));
+    }
+
     res.status(200).json({
       success: true,
       message: 'User status updated successfully',
@@ -529,6 +539,9 @@ const approveHost = async (req, res) => {
 
     console.log(`✅ Host ${host.email} approved by admin ${req.user.email}`);
 
+    sendHostApprovedEmail(host.email, host.name)
+      .catch(err => console.error('Error sending host approved email:', err.message));
+
     res.status(200).json({
       success: true,
       message: 'Host approved successfully',
@@ -593,6 +606,9 @@ const rejectHost = async (req, res) => {
     await host.save();
 
     console.log(`✅ Host ${host.email} rejected by admin ${req.user.email}. Reason: ${reason}`);
+
+    sendHostRejectedEmail(host.email, host.name, { reason })
+      .catch(err => console.error('Error sending host rejected email:', err.message));
 
     res.status(200).json({
       success: true,

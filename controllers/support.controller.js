@@ -1,7 +1,7 @@
 const SupportTicket = require('../models/SupportTicket');
 const Message = require('../models/Message');
 const User = require('../models/User');
-const { sendEmail } = require('../utils/sendEmail');
+const { sendSupportTicketEmail } = require('../utils/sendEmail');
 
 // Create a new support ticket
 const createTicket = async (req, res) => {
@@ -23,6 +23,14 @@ const createTicket = async (req, res) => {
 
     // Populate user details
     await ticket.populate('user', 'name email');
+
+    // Send confirmation email to user
+    sendSupportTicketEmail(ticket.user.email, ticket.user.name, {
+      ticketId: ticket._id,
+      subject: ticket.title,
+      priority: ticket.priority,
+      status: ticket.status,
+    }).catch(err => console.error('Error sending support ticket email:', err.message));
 
     res.status(201).json({
       success: true,

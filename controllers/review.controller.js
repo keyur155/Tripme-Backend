@@ -650,6 +650,7 @@ const Booking = require('../models/Booking');
 const Property = require('../models/Property');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
+const { sendNewReviewEmail } = require('../utils/sendEmail');
 
 // @desc    Create review
 // @route   POST /api/reviews
@@ -717,6 +718,21 @@ const createReview = async (req, res) => {
       message: `You received a ${rating.overall}-star review from ${req.user.name}`,
       data: { reviewId: review._id }
     });
+
+    // Send email to host about the new review
+    try {
+      const host = await User.findById(booking.host).select('name email');
+      if (host?.email) {
+        sendNewReviewEmail(host.email, host.name, {
+          propertyName: booking.listing?.title || 'Your property',
+          rating: rating.overall || rating,
+          comment: comment || 'No comment provided',
+          reviewerName: req.user.name,
+        }).catch(err => console.error('Error sending review notification email:', err.message));
+      }
+    } catch (emailErr) {
+      console.error('Error preparing review email:', emailErr.message);
+    }
 
     const populatedReview = await Review.findById(review._id)
       .populate('reviewer', 'name profileImage')

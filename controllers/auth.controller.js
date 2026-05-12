@@ -3,7 +3,7 @@ const Admin = require('../models/Admin');
 const VerificationToken = require('../models/VerificationToken');
 const Session = require('../models/Session');
 const { generateToken } = require('../utils/generateToken');
-const { sendEmail, sendWelcomeEmail, sendPasswordResetEmail } = require('../utils/sendEmail');
+const { sendEmail, sendWelcomeEmail, sendPasswordResetEmail, sendEmailVerifiedEmail } = require('../utils/sendEmail');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 // Google OAuth client
@@ -234,12 +234,19 @@ const verifyEmail = async (req, res) => {
     }
 
     // Update user
-    await User.findByIdAndUpdate(verificationToken.user, {
+    const verifiedUser = await User.findByIdAndUpdate(verificationToken.user, {
       isVerified: true
-    });
+    }, { new: true });
 
     // Delete verification token
     await VerificationToken.findByIdAndDelete(verificationToken._id);
+
+    // Send email verified confirmation
+    if (verifiedUser?.email) {
+      sendEmailVerifiedEmail(verifiedUser.email, verifiedUser.name).catch(err =>
+        console.error('Error sending email verified confirmation:', err.message)
+      );
+    }
 
     res.status(200).json({
       success: true,

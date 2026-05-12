@@ -3,6 +3,7 @@ const Payment = require('../models/Payment');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const PaymentService = require('../services/payment.service');
+const { sendPayoutCompletedEmail } = require('../utils/sendEmail');
 
 // @desc    Get host's payout history
 // @route   GET /api/payouts/host
@@ -495,10 +496,11 @@ const confirmPayoutDone = async (req, res) => {
 
     await payout.save();
 
-    // Notify the host
+    // Notify the host (in-app + email)
     try {
+      const hostId = payout.host._id || payout.host;
       await Notification.create({
-        user: payout.host._id || payout.host,
+        user: hostId,
         type: 'payout_completed',
         title: 'Payout Completed! 🎉',
         message: `Your payout of ₹${payout.amount} has been processed. Reference: ${reference}`,
@@ -509,8 +511,17 @@ const confirmPayoutDone = async (req, res) => {
           processedDate: payout.processedDate
         }
       });
+
+      const host = await User.findById(hostId).select('name email');
+      if (host?.email) {
+        sendPayoutCompletedEmail(host.email, host.name, {
+          amount: payout.amount,
+          bookingId: payout.booking,
+          utrNumber: reference,
+          processedDate: payout.processedDate,
+        }).catch(err => console.error('Error sending payout email:', err.message));
+      }
     } catch (notifErr) {
-      // Notification failure should not block the confirmation
       console.warn('⚠️ Failed to send payout notification:', notifErr.message);
     }
 

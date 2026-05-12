@@ -2,7 +2,7 @@ const User = require('../models/User');
 const Host = require('../models/Host');
 const KycVerification = require('../models/KycVerification');
 const Notification = require('../models/Notification');
-const { sendEmail } = require('../utils/sendEmail');
+const { sendKycSubmittedEmail, sendKycApprovedEmail, sendKycRejectedEmail } = require('../utils/sendEmail');
 
 // @desc    Submit KYC documents
 // @route   POST /api/kyc/submit
@@ -121,6 +121,11 @@ const submitKYC = async (req, res) => {
 
     // Create notification for admin (if admin notification system exists)
     // This will be handled by the admin dashboard
+
+    // Send KYC submitted confirmation email
+    sendKycSubmittedEmail(user.email, user.name).catch(err =>
+      console.error('Error sending KYC submitted email:', err.message)
+    );
 
     res.status(200).json({
       success: true,
@@ -423,12 +428,15 @@ const verifyKYC = async (req, res) => {
     });
 
     // Send email notification
-    const emailSubject = status === 'verified' ? 'KYC Approved' : 'KYC Rejected';
-    const emailMessage = status === 'verified'
-      ? 'Congratulations! Your KYC has been approved. You can now apply to become a host and start creating listings and services.'
-      : `Your KYC application has been rejected. Reason: ${rejectionReason}. Please submit new documents and try again.`;
-
-    await sendEmail(user.email, emailSubject, emailMessage);
+    if (status === 'verified') {
+      sendKycApprovedEmail(user.email, user.name).catch(err =>
+        console.error('Error sending KYC approved email:', err.message)
+      );
+    } else {
+      sendKycRejectedEmail(user.email, user.name, { rejectionReason }).catch(err =>
+        console.error('Error sending KYC rejected email:', err.message)
+      );
+    }
 
     res.status(200).json({
       success: true,

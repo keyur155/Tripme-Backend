@@ -21,12 +21,15 @@ const Notification = require('../models/Notification');
 const RefundService = require('../services/refundService');
 const {
   sendBookingConfirmationEmail,
+  sendNewBookingNotificationEmail,
   sendBookingCancellationEmail,
+  sendBookingRejectedEmail,
   sendHostCancelledBookingEmail,
   sendHostConfirmedBookingEmail,
   sendHostCompletedBookingEmail,
   sendHostCheckInGuestEmail,
-  sendHostStatusUpdateEmail
+  sendHostStatusUpdateEmail,
+  sendRefundInitiatedEmail,
 } = require('../utils/sendEmail');
 const { generateReceipt, generateReceiptHTML } = require('../utils/generateReceipt');
 
@@ -1530,8 +1533,8 @@ const processPaymentAndCreateBooking = async (req, res) => {
           status: 'pending' // Indicate that booking is pending host approval
         });
 
-        // Send notification email to host
-        await sendBookingConfirmationEmail(host.email, host.name, {
+        // Send notification email to host (use host-specific template)
+        await sendNewBookingNotificationEmail(host.email, host.name, {
           bookingId: bookingDoc._id,
           guestName: req.user.name,
           propertyName: listing?.title || service?.title,
@@ -1924,7 +1927,7 @@ const createBooking = async (req, res) => {
         specialRequests: specialRequests || null
       };
 
-      await sendBookingConfirmationEmail(host.email, host.name, bookingDetails);
+      await sendNewBookingNotificationEmail(host.email, host.name, bookingDetails);
     } catch (emailError) {
       console.error('Error sending email notification:', emailError);
       // Don't fail the booking if email fails

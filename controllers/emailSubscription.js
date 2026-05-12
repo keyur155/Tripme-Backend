@@ -67,26 +67,17 @@ exports.subscribeEmail = async (req, res) => {
   }
 };
 
-// Send notification email to support team
+// Send notification email to admin about new subscriber
 const sendNotificationEmail = async (subscriberEmail, subscriberName, userDetails) => {
   try {
-   
-
-     await sendEmail(subscriberEmail, 'welcome', {
-      userName: subscriberName || subscriberEmail.split('@')[0],
-      link: `${(process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim()}/verify-email`
+    const adminEmail = process.env.ADMIN_EMAIL || 'support@tripmeglobal.com';
+    await sendEmail(adminEmail, 'emailSubscription', {
+      subscriberEmail,
+      subscriberName,
+      userDetails
     });
-
-    // await sendEmail('19bet1030@gmail.com', emailContent);
-    await sendEmail('19bet1030@gmail.com', 'emailSubscription', {
-  subscriberEmail,
-  subscriberName,
-  userDetails
-});
-    
   } catch (error) {
-    console.error('Error sending notification email:', error);
-    // Don't throw error here as subscription should still succeed
+    console.error('Error sending subscription notification email:', error);
   }
 };
 
