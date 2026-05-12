@@ -3,7 +3,7 @@ const Joi = require('joi');
 const validateService = (req, res, next) => {
   const schema = Joi.object({
     title: Joi.string().min(3).max(100).required(),
-    description: Joi.string().min(10).max(500).required(),
+    description: Joi.string().min(10).max(5000).required(),
     serviceType: Joi.string()
       .valid('tour-guide', 'transport', 'fitness', 'chef', 'photographer', 'hairdresser', 'yoga-teacher', 'transportation', 'cleaning', 'music', 'art', 'other')
       .required(),
@@ -32,7 +32,8 @@ const validateService = (req, res, next) => {
       perPersonPrice: Joi.number().min(0).optional(),
       minPrice: Joi.number().min(0).optional(),
       maxPrice: Joi.number().min(0).optional(),
-      currency: Joi.string().default('INR')
+      currency: Joi.string().default('INR'),
+      includedGuests: Joi.number().min(1).default(1)
     }).required(),
     cancellationPolicy: Joi.string()
       .valid('flexible', 'moderate', 'strict', 'non-refundable')
@@ -68,7 +69,7 @@ const validateService = (req, res, next) => {
 const validateServiceUpdate = (req, res, next) => {
   const schema = Joi.object({
     title: Joi.string().min(3).max(100).optional(),
-    description: Joi.string().min(10).max(500).optional(),
+    description: Joi.string().min(10).max(5000).optional(),
     serviceType: Joi.string()
       .valid('tour-guide', 'transport', 'fitness', 'chef', 'photographer', 'hairdresser', 'yoga-teacher', 'transportation', 'cleaning', 'music', 'art', 'other')
       .optional(),
@@ -97,7 +98,8 @@ const validateServiceUpdate = (req, res, next) => {
       perPersonPrice: Joi.number().min(0).optional(),
       minPrice: Joi.number().min(0).optional(),
       maxPrice: Joi.number().min(0).optional(),
-      currency: Joi.string().optional()
+      currency: Joi.string().optional(),
+      includedGuests: Joi.number().min(1).optional()
     }).optional(),
     cancellationPolicy: Joi.string()
       .valid('flexible', 'moderate', 'strict', 'non-refundable')

@@ -46,7 +46,7 @@ const bookingSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'accepted', 'rejected', 'confirmed', 'cancelled', 'completed', 'expired'],
+    enum: ['pending', 'accepted', 'rejected', 'confirmed', 'cancelled', 'completed', 'expired', 'refunded', 'refund_failed'],
     default: 'pending'
   },
   checkIn: {
@@ -187,7 +187,7 @@ const bookingSchema = new mongoose.Schema({
   },
   refundStatus: {
     type: String,
-    enum: ['pending', 'processed', 'completed', 'not_applicable'],
+    enum: ['pending', 'processing', 'processed', 'completed', 'failed', 'rejected', 'not_applicable'],
     default: 'not_applicable'
   },
   receiptId: {

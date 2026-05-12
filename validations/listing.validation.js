@@ -16,11 +16,11 @@ const validateListing = (req, res, next) => {
       }),
     description: Joi.string()
       .min(50)
-      .max(2000)
+      .max(5000)
       .required()
       .messages({
         'string.min': 'Description must be at least 50 characters long',
-        'string.max': 'Description cannot exceed 2000 characters',
+        'string.max': 'Description cannot exceed 5000 characters',
         'any.required': 'Description is required'
       }),
     type: Joi.string()
@@ -114,6 +114,14 @@ const validateListing = (req, res, next) => {
         .messages({
           'number.min': 'Extra guest price cannot be negative',
           'number.max': 'Extra guest price cannot exceed $1,000'
+        }),
+      includedGuests: Joi.number()
+        .min(1)
+        .max(20)
+        .default(1)
+        .messages({
+          'number.min': 'Included guests must be at least 1',
+          'number.max': 'Included guests cannot exceed 20'
         }),
       cleaningFee: Joi.number()
         .min(0)
@@ -443,11 +451,11 @@ const validateListingUpdate = (req, res, next) => {
       }),
     description: Joi.string()
       .min(50)
-      .max(2000)
+      .max(5000)
       .optional()
       .messages({
         'string.min': 'Description must be at least 50 characters long',
-        'string.max': 'Description cannot exceed 2000 characters'
+        'string.max': 'Description cannot exceed 5000 characters'
       }),
     propertyType: Joi.string()
       .valid('premium', 'standard', 'budget', 'luxury')

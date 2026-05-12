@@ -1,9 +1,11 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 const PricingConfig = require('../models/PricingConfig');
 const User = require('../models/User');
 const Property = require('../models/Property');
+const Service = require('../models/Service');
 const Booking = require('../models/Booking');
 const Payment = require('../models/Payment');
+const Refund = require('../models/Refund');
 const Review = require('../models/Review');
 const PaymentAuditLog = require('../models/PaymentAuditLog');
 const Admin = require('../models/Admin');
@@ -11,7 +13,15 @@ const Session = require('../models/Session');
 const KycVerification = require('../models/KycVerification');
 const jwt = require('jsonwebtoken');
 const razorpayService = require('../services/razorpay.service');
-const { sendAccountSuspendedEmail, sendAccountActivatedEmail, sendHostApprovedEmail, sendHostRejectedEmail } = require('../utils/sendEmail');
+const {
+  sendAccountSuspendedEmail,
+  sendAccountActivatedEmail,
+  sendHostApprovedEmail,
+  sendHostRejectedEmail,
+  sendRefundInitiatedEmail,
+  sendRefundCompletedEmail,
+  sendHostRefundNotificationEmail,
+} = require('../utils/sendEmail');
 
 // Dashboard Stats
 const getDashboardStats = async (req, res) => {
@@ -79,7 +89,7 @@ const getDashboardStats = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching dashboard stats:', error);
+    console.error('âŒ Error fetching dashboard stats:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch dashboard stats',
@@ -107,7 +117,7 @@ const getCurrentPlatformFeeRate = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching platform fee rate:', error);
+    console.error('âŒ Error fetching platform fee rate:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch platform fee rate',
@@ -164,7 +174,7 @@ const updatePlatformFeeRate = async (req, res) => {
     );
 
     const adminName = req.user?.name || req.user?.email || 'Unknown Admin';
-    console.log(`✅ Platform fee updated by admin ${adminName}: platform ${(platformFeeRate * 100).toFixed(1)}%, GST ${( (gstRate ?? currentConfig.gstRate) * 100).toFixed(1)}%, processing ${( (processingFeeRate ?? currentConfig.processingFeeRate) * 100).toFixed(2)}% + ₹${(processingFeeFixed ?? currentConfig.processingFeeFixed)}`);
+    console.log(`âœ… Platform fee updated by admin ${adminName}: platform ${(platformFeeRate * 100).toFixed(1)}%, GST ${( (gstRate ?? currentConfig.gstRate) * 100).toFixed(1)}%, processing ${( (processingFeeRate ?? currentConfig.processingFeeRate) * 100).toFixed(2)}% + â‚¹${(processingFeeFixed ?? currentConfig.processingFeeFixed)}`);
 
     res.status(200).json({
       success: true,
@@ -186,7 +196,7 @@ const updatePlatformFeeRate = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error updating platform fee rate:', error);
+    console.error('âŒ Error updating platform fee rate:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update platform fee rate',
@@ -223,7 +233,7 @@ const getPlatformFeeHistory = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching platform fee history:', error);
+    console.error('âŒ Error fetching platform fee history:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch platform fee history',
@@ -235,8 +245,8 @@ const getPlatformFeeHistory = async (req, res) => {
 // User Management Functions
 const getUsers = async (req, res) => {
   try {
-    console.log('🔍 getUsers called with query:', req.query);
-    console.log('🔍 User model:', User);
+    console.log('ðŸ” getUsers called with query:', req.query);
+    console.log('ðŸ” User model:', User);
 
     const { page = 1, limit = 20, role, status, search } = req.query;
 
@@ -251,7 +261,7 @@ const getUsers = async (req, res) => {
       ];
     }
 
-    console.log('🔍 Filter:', filter);
+    console.log('ðŸ” Filter:', filter);
 
     // Get users with pagination
     const users = await User.find(filter)
@@ -260,11 +270,11 @@ const getUsers = async (req, res) => {
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
-    console.log('🔍 Users found:', users.length);
+    console.log('ðŸ” Users found:', users.length);
 
     const total = await User.countDocuments(filter);
 
-    console.log('🔍 Total users:', total);
+    console.log('ðŸ” Total users:', total);
 
     res.status(200).json({
       success: true,
@@ -278,8 +288,8 @@ const getUsers = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching users:', error);
-    console.error('❌ Error stack:', error.stack);
+    console.error('âŒ Error fetching users:', error);
+    console.error('âŒ Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch users',
@@ -316,7 +326,7 @@ const updateUserStatus = async (req, res) => {
 
     await user.save();
 
-    console.log(`✅ User ${user.email} status changed from ${oldStatus} to ${accountStatus} by admin ${req.user.email}`);
+    console.log(`âœ… User ${user.email} status changed from ${oldStatus} to ${accountStatus} by admin ${req.user.email}`);
 
     // Send email notification based on new status
     if (accountStatus === 'suspended' || accountStatus === 'banned') {
@@ -341,7 +351,7 @@ const updateUserStatus = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error updating user status:', error);
+    console.error('âŒ Error updating user status:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update user status',
@@ -381,7 +391,7 @@ const getUser = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching user:', error);
+    console.error('âŒ Error fetching user:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch user',
@@ -415,7 +425,7 @@ const updateUser = async (req, res) => {
 
     await user.save();
 
-    console.log(`✅ User ${user.email} updated by admin ${req.user.email}`);
+    console.log(`âœ… User ${user.email} updated by admin ${req.user.email}`);
 
     res.status(200).json({
       success: true,
@@ -433,7 +443,7 @@ const updateUser = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error updating user:', error);
+    console.error('âŒ Error updating user:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update user',
@@ -498,7 +508,7 @@ const getHosts = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching hosts:', error);
+    console.error('âŒ Error fetching hosts:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch hosts',
@@ -537,7 +547,7 @@ const approveHost = async (req, res) => {
 
     await host.save();
 
-    console.log(`✅ Host ${host.email} approved by admin ${req.user.email}`);
+    console.log(`âœ… Host ${host.email} approved by admin ${req.user.email}`);
 
     sendHostApprovedEmail(host.email, host.name)
       .catch(err => console.error('Error sending host approved email:', err.message));
@@ -559,7 +569,7 @@ const approveHost = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error approving host:', error);
+    console.error('âŒ Error approving host:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to approve host',
@@ -605,7 +615,7 @@ const rejectHost = async (req, res) => {
 
     await host.save();
 
-    console.log(`✅ Host ${host.email} rejected by admin ${req.user.email}. Reason: ${reason}`);
+    console.log(`âœ… Host ${host.email} rejected by admin ${req.user.email}. Reason: ${reason}`);
 
     sendHostRejectedEmail(host.email, host.name, { reason })
       .catch(err => console.error('Error sending host rejected email:', err.message));
@@ -628,7 +638,7 @@ const rejectHost = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error rejecting host:', error);
+    console.error('âŒ Error rejecting host:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to reject host',
@@ -697,7 +707,7 @@ const getProperties = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching properties:', error);
+    console.error('âŒ Error fetching properties:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch properties',
@@ -728,7 +738,7 @@ const approveListing = async (req, res) => {
 
     await property.save();
 
-    console.log(`✅ Property ${property.title} approved by admin ${req.user.email}`);
+    console.log(`âœ… Property ${property.title} approved by admin ${req.user.email}`);
 
     res.status(200).json({
       success: true,
@@ -745,7 +755,7 @@ const approveListing = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error approving property:', error);
+    console.error('âŒ Error approving property:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to approve property',
@@ -783,7 +793,7 @@ const rejectListing = async (req, res) => {
 
     await property.save();
 
-    console.log(`✅ Property ${property.title} rejected by admin ${req.user.email}. Reason: ${reason}`);
+    console.log(`âœ… Property ${property.title} rejected by admin ${req.user.email}. Reason: ${reason}`);
 
     res.status(200).json({
       success: true,
@@ -801,7 +811,7 @@ const rejectListing = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error rejecting property:', error);
+    console.error('âŒ Error rejecting property:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to reject property',
@@ -826,7 +836,7 @@ const toggleFeatured = async (req, res) => {
     property.isFeatured = !property.isFeatured;
     await property.save();
 
-    console.log(`✅ Property ${property.title} featured status set to ${property.isFeatured} by admin ${req.user?.email}`);
+    console.log(`âœ… Property ${property.title} featured status set to ${property.isFeatured} by admin ${req.user?.email}`);
 
     res.status(200).json({
       success: true,
@@ -838,7 +848,7 @@ const toggleFeatured = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error toggling featured status:', error);
+    console.error('âŒ Error toggling featured status:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update featured status',
@@ -863,7 +873,7 @@ const toggleSponsored = async (req, res) => {
     property.isSponsored = !property.isSponsored;
     await property.save();
 
-    console.log(`✅ Property ${property.title} sponsored status set to ${property.isSponsored} by admin ${req.user?.email}`);
+    console.log(`âœ… Property ${property.title} sponsored status set to ${property.isSponsored} by admin ${req.user?.email}`);
 
     res.status(200).json({
       success: true,
@@ -875,7 +885,7 @@ const toggleSponsored = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error toggling sponsored status:', error);
+    console.error('âŒ Error toggling sponsored status:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update sponsored status',
@@ -927,7 +937,7 @@ const getBookings = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching bookings:', error);
+    console.error('âŒ Error fetching bookings:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch bookings',
@@ -994,7 +1004,7 @@ const getBookings = async (req, res) => {
 
 //     await booking.save();
 
-//     console.log(`✅ Booking ${booking.receiptId} refunded by admin ${req.user.email}. Amount: ${totalRefundAmount}, Reason: ${reason}`);
+//     console.log(`âœ… Booking ${booking.receiptId} refunded by admin ${req.user.email}. Amount: ${totalRefundAmount}, Reason: ${reason}`);
 
 //     res.status(200).json({
 //       success: true,
@@ -1013,7 +1023,7 @@ const getBookings = async (req, res) => {
 //       }
 //     });
 //   } catch (error) {
-//     console.error('❌ Error refunding booking:', error);
+//     console.error('âŒ Error refunding booking:', error);
 //     res.status(500).json({
 //       success: false,
 //       message: 'Failed to refund booking',
@@ -1027,144 +1037,198 @@ const getBookings = async (req, res) => {
 
 const refundBooking = async (req, res) => {
   try {
-    // 🔒 Admin guard
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only admin can process refunds'
-      });
-    }
-
     const { bookingId } = req.params;
-    const { reason, refundAmount, refundType = 'full' } = req.body;
+    const { reason = 'Admin-initiated refund', refundAmount, amount, refundType = 'full', notes = '' } = req.body;
 
-    if (!reason) {
-      return res.status(400).json({
-        success: false,
-        message: 'Refund reason is required'
-      });
-    }
-
+    // â”€â”€ 1. Load booking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const booking = await Booking.findById(bookingId)
-      .populate('payment')
-      .populate('user', 'name email');
+      .populate('user', 'name email')
+      .populate('host', 'name email')
+      .populate('listing', 'title')
+      .populate('service', 'title');
 
     if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
+      return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    // ❗ Only cancelled bookings can be refunded
-    if (booking.status !== 'cancelled') {
+    // â”€â”€ 2. Fetch Payment directly (payment is a virtual on Booking) â”€â”€â”€â”€
+    const payment = await Payment.findOne({ booking: bookingId });
+    if (!payment) {
       return res.status(400).json({
         success: false,
-        message: 'Only cancelled bookings can be refunded'
+        message: 'No payment record found for this booking. Cannot process refund.',
       });
     }
 
-    // ❌ Already refunded
-    if (booking.refundStatus === 'completed') {
+    if (!payment.razorpayPaymentId) {
       return res.status(400).json({
         success: false,
-        message: 'Booking already refunded'
+        message: 'Payment was not captured via Razorpay. Manual refund required.',
       });
     }
 
-    // ❌ Payment missing
-    if (!booking.payment || !booking.payment.razorpayPaymentId) {
+    // â”€â”€ 3. Validate payment status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if (!['completed', 'authorized'].includes(payment.status)) {
       return res.status(400).json({
         success: false,
-        message: 'Razorpay payment not found for this booking'
+        message: `Cannot refund payment with status '${payment.status}'. Payment must be completed.`,
       });
     }
 
-    // 💰 Validate refund amount
-    const finalRefundAmount =
-      refundAmount !== undefined
-        ? Number(refundAmount)
-        : booking.totalAmount;
-
-    if (
-      !Number.isFinite(finalRefundAmount) ||
-      finalRefundAmount <= 0 ||
-      finalRefundAmount > booking.totalAmount
-    ) {
+    // â”€â”€ 4. Duplicate guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const existingRefund = await Refund.findOne({
+      booking: bookingId,
+      status: { $in: ['processing', 'completed', 'approved'] },
+    });
+    if (existingRefund) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid refund amount'
+        message: 'A refund has already been initiated or completed for this booking.',
+        data: { existingRefundId: existingRefund._id, status: existingRefund.status },
       });
     }
 
-    // ============================
-    // 🔁 RAZORPAY REFUND (SERVICE)
-    // ============================
-    const refund = await razorpayService.createRefund(
-      booking.payment.razorpayPaymentId,
-      finalRefundAmount,
-      reason,
-      {
-        bookingId: booking._id.toString(),
-        refundType,
-        refundedBy: req.user.email
-      }
-    );
+    // â”€â”€ 5. Determine refund amount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const paidAmount = payment.amount || booking.totalAmount;
+    const totalAlreadyRefunded = (payment.refunds || []).reduce((sum, r) => sum + (r.amount || 0), 0);
+    const maxRefundable = paidAmount - totalAlreadyRefunded;
 
-    // ============================
-    // ✅ UPDATE PAYMENT
-    // ============================
-    booking.payment.status =
-      finalRefundAmount === booking.totalAmount
-        ? 'refunded'
-        : 'partially_refunded';
+    // Accept either 'amount' or 'refundAmount' from body
+    const requestedAmount = refundAmount !== undefined ? Number(refundAmount) : (amount !== undefined ? Number(amount) : maxRefundable);
+    const finalRefundAmount = requestedAmount;
 
-    booking.payment.refundAmount = finalRefundAmount;
-    booking.payment.refundReason = reason;
-    booking.payment.razorpayRefundId = refund.refundId;
-    booking.payment.refundedBy = req.user._id;
-    booking.payment.refundedAt = new Date();
+    if (!Number.isFinite(finalRefundAmount) || finalRefundAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid refund amount' });
+    }
+    if (finalRefundAmount > maxRefundable) {
+      return res.status(400).json({
+        success: false,
+        message: `Refund amount â‚¹${finalRefundAmount} exceeds refundable balance â‚¹${maxRefundable} (paid: â‚¹${paidAmount}, already refunded: â‚¹${totalAlreadyRefunded})`,
+      });
+    }
 
-    await booking.payment.save();
+    console.log(`ðŸ”„ Admin refund: bookingId=${bookingId}, amount=â‚¹${finalRefundAmount}, razorpayPaymentId=${payment.razorpayPaymentId}`);
 
-    // ============================
-    // ✅ UPDATE BOOKING
-    // ============================
-    booking.refundAmount = finalRefundAmount;
-    booking.refundType = refundType;
-    booking.refundReason = reason;
-    booking.refundStatus = 'completed';
-    booking.refundedBy = req.user._id;
-    booking.refundedAt = new Date();
-    booking.paymentStatus = booking.payment.status;
+    // â”€â”€ 6. Call Razorpay Refund API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    let refundResult;
+    try {
+      refundResult = await razorpayService.createRefund(
+        payment.razorpayPaymentId,
+        finalRefundAmount,
+        reason,
+        {
+          bookingId: bookingId.toString(),
+          adminId: req.user?._id?.toString() || 'admin',
+          refundedBy: req.user?.email || 'admin',
+        }
+      );
+    } catch (rzpError) {
+      console.error('âŒ Admin refund â€” Razorpay error:', rzpError.message, rzpError.error);
+      return res.status(502).json({
+        success: false,
+        message: 'Razorpay refund API failed',
+        error: {
+          message: rzpError.message,
+          code: rzpError.error?.code,
+          description: rzpError.error?.description,
+        },
+      });
+    }
 
+    // â”€â”€ 7. Create Refund document â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const refundReference = `ADM-REF-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+    const refundDoc = await Refund.create({
+      booking: booking._id,
+      payment: payment._id,
+      user: booking.user._id,
+      host: booking.host._id,
+      amount: finalRefundAmount,
+      currency: booking.currency || 'INR',
+      reason: 'guest_request',
+      type: refundType === 'partial' ? 'partial' : 'full',
+      status: 'processing',
+      razorpayRefundId: refundResult.refundId,
+      gatewayResponse: refundResult.rawRefund,
+      adminNotes: notes || `Initiated by admin ${req.user?.email || 'unknown'}`,
+      refundReference,
+      refundMethod: 'original_payment_method',
+      approvedBy: req.user?._id,
+      approvedAt: new Date(),
+      processedAt: new Date(),
+      estimatedProcessingTime: '5-7 business days',
+    });
+
+    // â”€â”€ 8. Update Payment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    payment.refunds.push({
+      amount: finalRefundAmount,
+      reason: 'cancellation',
+      type: refundType === 'partial' ? 'partial' : 'full',
+      transactionId: refundResult.refundId,
+      gatewayResponse: refundResult.rawRefund,
+      adminNotes: notes,
+    });
+    const newTotalRefunded = totalAlreadyRefunded + finalRefundAmount;
+    payment.status = newTotalRefunded >= paidAmount ? 'refunded' : 'partially_refunded';
+    await payment.save();
+
+    // â”€â”€ 9. Update Booking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    booking.refundAmount = (booking.refundAmount || 0) + finalRefundAmount;
+    booking.refunded = true;
+    booking.refundStatus = newTotalRefunded >= paidAmount ? 'processed' : 'pending';
+    booking.paymentStatus = payment.status;
+    if (!['cancelled', 'completed'].includes(booking.status)) {
+      booking.status = 'cancelled';
+      booking.cancelledAt = new Date();
+      booking.cancelledBy = req.user?._id;
+      booking.cancellationReason = reason;
+    }
     await booking.save();
 
-    console.log(
-      `✅ Refund success | Booking ${booking._id} | Razorpay Refund ${refund.refundId}`
-    );
+    // â”€â”€ 10. Email notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const propertyName = booking.listing?.title || booking.service?.title || 'Your booking';
+    const emailData = {
+      bookingId: booking._id.toString(),
+      amount: finalRefundAmount,
+      reason,
+      refundReference,
+      razorpayRefundId: refundResult.refundId,
+      propertyName,
+    };
+    if (booking.user?.email) {
+      sendRefundCompletedEmail(booking.user.email, booking.user.name || 'Guest', emailData)
+        .catch(err => console.error('Guest refund email error:', err.message));
+    }
+    if (booking.host?.email) {
+      sendHostRefundNotificationEmail(booking.host.email, booking.host.name || 'Host', emailData)
+        .catch(err => console.error('Host refund email error:', err.message));
+    }
+
+    console.log(`âœ… Admin refund complete: razorpayRefundId=${refundResult.refundId}, amount=â‚¹${finalRefundAmount}`);
 
     return res.status(200).json({
       success: true,
-      message: 'Refund processed successfully',
+      message: `Refund of â‚¹${finalRefundAmount} initiated successfully`,
       data: {
-        bookingId: booking._id,
+        refundId: refundDoc._id,
+        razorpayRefundId: refundResult.refundId,
         refundAmount: finalRefundAmount,
-        razorpayRefundId: refund.refundId,
-        refundStatus: refund.status
-      }
+        refundStatus: refundResult.status,
+        refundReference,
+        bookingStatus: booking.status,
+        paymentStatus: payment.status,
+      },
     });
 
   } catch (error) {
-    console.error('❌ Admin refund failed:', error);
-
+    console.error('âŒ Admin refundBooking error:', error.message, error.stack);
     return res.status(500).json({
       success: false,
-      message: 'Refund failed',
-      error: error.message
+      message: 'Internal server error while processing refund',
+      error: error.message,
     });
   }
 };
+
 
 
 
@@ -1225,7 +1289,7 @@ const getKYC = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching KYC documents:', error);
+    console.error('âŒ Error fetching KYC documents:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch KYC documents',
@@ -1286,7 +1350,7 @@ const getKYCById = async (req, res) => {
       data: transformedData
     });
   } catch (error) {
-    console.error('❌ Error fetching KYC document:', error);
+    console.error('âŒ Error fetching KYC document:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch KYC document',
@@ -1332,7 +1396,7 @@ const verifyKYC = async (req, res) => {
       await user.save();
     }
 
-    console.log(`✅ KYC document for user ${user?.email} verified by admin ${req.user.email}`);
+    console.log(`âœ… KYC document for user ${user?.email} verified by admin ${req.user.email}`);
 
     res.status(200).json({
       success: true,
@@ -1352,7 +1416,7 @@ const verifyKYC = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error verifying KYC:', error);
+    console.error('âŒ Error verifying KYC:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to verify KYC document',
@@ -1411,7 +1475,7 @@ const rejectKYC = async (req, res) => {
       await user.save();
     }
 
-    console.log(`✅ KYC document for user ${user?.email} rejected by admin ${req.user.email}. Reason: ${reason}`);
+    console.log(`âœ… KYC document for user ${user?.email} rejected by admin ${req.user.email}. Reason: ${reason}`);
 
     res.status(200).json({
       success: true,
@@ -1432,7 +1496,7 @@ const rejectKYC = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error rejecting KYC:', error);
+    console.error('âŒ Error rejecting KYC:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to reject KYC document',
@@ -1481,7 +1545,7 @@ const getPayments = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching payments:', error);
+    console.error('âŒ Error fetching payments:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch payments',
@@ -1530,7 +1594,7 @@ const processPayout = async (req, res) => {
 
     await payment.save();
 
-    console.log(`✅ Payout processed for payment ${payment.transactionId} by admin ${req.user.email}`);
+    console.log(`âœ… Payout processed for payment ${payment.transactionId} by admin ${req.user.email}`);
 
     res.status(200).json({
       success: true,
@@ -1548,7 +1612,7 @@ const processPayout = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error processing payout:', error);
+    console.error('âŒ Error processing payout:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to process payout',
@@ -1614,7 +1678,7 @@ const getReviews = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching reviews:', error);
+    console.error('âŒ Error fetching reviews:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch reviews',
@@ -1653,7 +1717,7 @@ const flagReview = async (req, res) => {
 
     await review.save();
 
-    console.log(`✅ Review ${review._id} ${action}ed by admin ${req.user.email}. Reason: ${reason}`);
+    console.log(`âœ… Review ${review._id} ${action}ed by admin ${req.user.email}. Reason: ${reason}`);
 
     res.status(200).json({
       success: true,
@@ -1669,7 +1733,7 @@ const flagReview = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error flagging review:', error);
+    console.error('âŒ Error flagging review:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to flag review',
@@ -1708,7 +1772,7 @@ const deleteReview = async (req, res) => {
 
     await review.save();
 
-    console.log(`✅ Review ${review._id} deleted by admin ${req.user.email}. Reason: ${reason}`);
+    console.log(`âœ… Review ${review._id} deleted by admin ${req.user.email}. Reason: ${reason}`);
 
     res.status(200).json({
       success: true,
@@ -1724,7 +1788,7 @@ const deleteReview = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error deleting review:', error);
+    console.error('âŒ Error deleting review:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to delete review',
@@ -1765,7 +1829,7 @@ const getSettings = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching settings:', error);
+    console.error('âŒ Error fetching settings:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch settings',
@@ -1815,7 +1879,7 @@ const updateSettings = async (req, res) => {
       );
     }
 
-    console.log(`✅ Settings updated by admin ${req.user.email}`);
+    console.log(`âœ… Settings updated by admin ${req.user.email}`);
 
     res.status(200).json({
       success: true,
@@ -1827,7 +1891,7 @@ const updateSettings = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error updating settings:', error);
+    console.error('âŒ Error updating settings:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update settings',
@@ -1920,7 +1984,7 @@ const getAnalytics = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching analytics:', error);
+    console.error('âŒ Error fetching analytics:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch analytics',
@@ -1961,7 +2025,7 @@ const getReports = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error generating report:', error);
+    console.error('âŒ Error generating report:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to generate report',
@@ -2042,7 +2106,7 @@ const getRecentActivities = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching recent activities:', error);
+    console.error('âŒ Error fetching recent activities:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch recent activities',
@@ -2087,7 +2151,7 @@ const getSystemHealth = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error checking system health:', error);
+    console.error('âŒ Error checking system health:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to check system health',
@@ -2337,7 +2401,7 @@ const adminSignup = async (req, res) => {
       createdAt: admin.createdAt
     };
 
-    console.log(`✅ Admin signup successful: ${admin.email}`);
+    console.log(`âœ… Admin signup successful: ${admin.email}`);
 
     res.status(201).json({
       success: true,
@@ -2394,7 +2458,7 @@ const getAvailableBadges = async (req, res) => {
       data: AVAILABLE_BADGES
     });
   } catch (error) {
-    console.error('❌ Error fetching available badges:', error);
+    console.error('âŒ Error fetching available badges:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch available badges',
@@ -2427,7 +2491,7 @@ const getPropertyBadges = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching property badges:', error);
+    console.error('âŒ Error fetching property badges:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch property badges',
@@ -2480,7 +2544,7 @@ const updatePropertyBadges = async (req, res) => {
 
     await property.save();
 
-    console.log(`✅ Property ${property.title} badges updated by admin ${req.user?.email}`);
+    console.log(`âœ… Property ${property.title} badges updated by admin ${req.user?.email}`);
 
     res.status(200).json({
       success: true,
@@ -2494,7 +2558,7 @@ const updatePropertyBadges = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error updating property badges:', error);
+    console.error('âŒ Error updating property badges:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to update property badges',
@@ -2565,7 +2629,7 @@ const addPropertyBadge = async (req, res) => {
 
     await property.save();
 
-    console.log(`✅ Badge "${badge.label}" added to property ${property.title} by admin ${req.user?.email}`);
+    console.log(`âœ… Badge "${badge.label}" added to property ${property.title} by admin ${req.user?.email}`);
 
     res.status(200).json({
       success: true,
@@ -2578,7 +2642,7 @@ const addPropertyBadge = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error adding property badge:', error);
+    console.error('âŒ Error adding property badge:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to add property badge',
@@ -2644,7 +2708,7 @@ const removePropertyBadge = async (req, res) => {
 
     await property.save();
 
-    console.log(`✅ Badge "${badgeType}" removed from property ${property.title} by admin ${req.user?.email}`);
+    console.log(`âœ… Badge "${badgeType}" removed from property ${property.title} by admin ${req.user?.email}`);
 
     res.status(200).json({
       success: true,
@@ -2657,7 +2721,7 @@ const removePropertyBadge = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error removing property badge:', error);
+    console.error('âŒ Error removing property badge:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to remove property badge',
@@ -2682,7 +2746,7 @@ const toggleAdminBadges = async (req, res) => {
     property.useAdminBadges = !property.useAdminBadges;
     await property.save();
 
-    console.log(`✅ Property ${property.title} admin badges ${property.useAdminBadges ? 'enabled' : 'disabled'} by admin ${req.user?.email}`);
+    console.log(`âœ… Property ${property.title} admin badges ${property.useAdminBadges ? 'enabled' : 'disabled'} by admin ${req.user?.email}`);
 
     res.status(200).json({
       success: true,
@@ -2695,7 +2759,7 @@ const toggleAdminBadges = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error toggling admin badges:', error);
+    console.error('âŒ Error toggling admin badges:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to toggle admin badges',
@@ -2703,6 +2767,7 @@ const toggleAdminBadges = async (req, res) => {
     });
   }
 };
+
 
 module.exports = {
   // Authentication

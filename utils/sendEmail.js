@@ -662,6 +662,45 @@ const emailTemplates = {
       paragraph('You can update your information and re-apply. If you have questions, our support team is happy to help.')
     )
   }),
+
+  // ── 28. Booking Cancelled by Guest (to Host) ─────────────────────────────
+  guestCancelledBookingNotification: (userName, details) => ({
+    subject: `Booking Cancelled by Guest — ${details.propertyName}`,
+    html: wrapLayout(
+      BRAND.danger, '🚫', 'Booking Cancelled', 'A guest has cancelled their stay',
+      greeting(userName) +
+      paragraph(`We're notifying you that <strong>${details.guestName}</strong> has cancelled their booking for your property.`) +
+      infoCard(BRAND.danger, [
+        ['Property', details.propertyName],
+        ['Guest', details.guestName],
+        ['Booking ID', details.bookingId],
+        ['Check-in', formatDate(details.checkIn)],
+        ['Check-out', formatDate(details.checkOut)],
+        ...(details.reason ? [['Cancellation Reason', details.reason]] : []),
+      ]) +
+      alertBox('#FEF2F2', '#FECACA', '#991B1B', '🗓️', 'Dates Released',
+        'The dates for this booking have been automatically released back to your availability calendar.') +
+      paragraph('You can view details and refund information in your host dashboard.')
+    )
+  }),
+
+  // ── 29. Refund Processed Notification (to Host) ──────────────────────────
+  hostRefundNotification: (userName, details) => ({
+    subject: `Refund Processed — Booking ${details.bookingId}`,
+    html: wrapLayout(
+      BRAND.color, '💸', 'Refund Processed', 'A refund has been completed',
+      greeting(userName) +
+      paragraph(`We're notifying you that a refund of <strong>${formatCurrency(details.amount)}</strong> has been successfully processed for booking <strong>#${details.bookingId}</strong>.`) +
+      infoCard(BRAND.color, [
+        ['Property', details.propertyName || 'Property'],
+        ['Booking ID', details.bookingId],
+        ['Refund Amount', formatCurrency(details.amount)],
+        ['Reason', details.reason || 'Cancellation/Adjustment'],
+        ['Date', formatDate(new Date())],
+      ]) +
+      paragraph('If this refund was due to a cancellation, your calendar has already been updated. The adjusted amount will be reflected in your payout history.')
+    )
+  }),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -805,6 +844,12 @@ const sendHostRejectedEmail = async (email, userName, details) =>
 const sendNewsletterEmail = async (email, userName, content) =>
   sendEmail(email, 'newsletter', { userName, content });
 
+const sendGuestCancelledBookingEmail = async (email, userName, cancellationDetails) =>
+  sendEmail(email, 'guestCancelledBookingNotification', { userName, ...cancellationDetails });
+
+const sendHostRefundNotificationEmail = async (email, userName, refundDetails) =>
+  sendEmail(email, 'hostRefundNotification', { userName, ...refundDetails });
+
 const sendCustomEmail = async (to, subject, htmlContent, textContent = null) => {
   try {
     if (process.env.RESEND_API_KEY) {
@@ -874,6 +919,8 @@ module.exports = {
   sendPaymentSuccessEmail,
   sendRefundInitiatedEmail,
   sendRefundCompletedEmail,
+  sendHostRefundNotificationEmail,   // ← was missing
+  sendGuestCancelledBookingEmail,
   sendPayoutCompletedEmail,
   sendKycSubmittedEmail,
   sendKycApprovedEmail,

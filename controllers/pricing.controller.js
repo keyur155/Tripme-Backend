@@ -168,8 +168,9 @@ const calculatePricing = async (req, res) => {
     }
 
     // Calculate extra guest cost
-    const extraGuests = guests.adults > 1 ? guests.adults - 1 : 0;
-    const extraGuestCost = extraGuests * (property.pricing?.extraGuestPrice || 0);
+    const includedGuests = property.pricing?.includedGuests || 1;
+    const extraGuestsCount = Math.max(0, guests.adults - includedGuests);
+    const extraGuestCost = extraGuestsCount * (property.pricing?.extraGuestPrice || 0);
 
     // Build pricing parameters, including extension costs like secure/route logic
     let pricingParams = {
@@ -179,7 +180,7 @@ const calculatePricing = async (req, res) => {
       serviceFee: property.pricing?.serviceFee || 0,
       securityDeposit: property.pricing?.securityDeposit || 0,
       extraGuestPrice: property.pricing?.extraGuestPrice || 0,
-      extraGuests,
+      extraGuests: extraGuestsCount,
       hourlyExtension: 0, // cost, not hours
       discountAmount: 0,
       currency: property.pricing?.currency || 'INR',
@@ -248,7 +249,7 @@ const calculatePricing = async (req, res) => {
       baseAmount: pricingBreakdown.baseAmount,
       nights: is24HourBooking ? 1 : nights,
       totalHours: is24HourBooking ? (pricingParams.totalHours || 24) : undefined,
-      extraGuests,
+      extraGuests: extraGuestsCount,
       extraGuestCost: pricingBreakdown.extraGuestCost, // Use backend-calculated value (includes nights)
       cleaningFee: pricingBreakdown.cleaningFee,
       serviceFee: pricingBreakdown.serviceFee,

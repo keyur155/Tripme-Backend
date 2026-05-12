@@ -15,22 +15,27 @@ async function razorpayHttpRequest(endpoint, method, data) {
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   
   const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
-  const postData = JSON.stringify(data);
-  
+  const isGetRequest = method.toUpperCase() === 'GET';
+
+  // Never send a body on GET requests — Razorpay returns BAD_REQUEST_ERROR if Content-Length is set
+  const postData = isGetRequest ? null : JSON.stringify(data);
+
+  const headers = {
+    'Authorization': `Basic ${auth}`,
+    'Content-Type': 'application/json',
+  };
+
+  if (!isGetRequest && postData) {
+    headers['Content-Length'] = Buffer.byteLength(postData);
+  }
+
   const options = {
     hostname: 'api.razorpay.com',
     port: 443,
     path: `/v1${endpoint}`,
     method: method,
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(postData)
-    },
-    // Disable certificate verification only in development (NOT for production)
-    // rejectUnauthorized: process.env.NODE_ENV === 'production'
+    headers,
   };
-  
 
   return new Promise((resolve, reject) => {
     const req = https.request(options, (res) => {
@@ -62,7 +67,9 @@ async function razorpayHttpRequest(endpoint, method, data) {
       reject(new Error(`Network error connecting to Razorpay: ${e.message}`));
     });
 
-    req.write(postData);
+    if (!isGetRequest && postData) {
+      req.write(postData);
+    }
     req.end();
   });
 }
@@ -215,25 +222,48 @@ function verifyWebhookSignature(payload, signature) {
 }
 
 async function createRefund(paymentId, amount, notes = '', meta = {}) {
-  if (!isInitialized()) {
-    initializeRazorpay();
-    if (!isInitialized()) {
-      throw new Error('Razorpay not initialized');
-    }
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+  if (!keyId || !keySecret) {
+    throw new Error('Razorpay not initialized: missing credentials');
   }
 
   const amountPaise = Math.round(Number(amount) * 100);
   if (!Number.isFinite(amountPaise) || amountPaise <= 0) {
-    throw new Error('Invalid refund amount');
+    throw new Error(`Invalid refund amount: ${amount} => ${amountPaise} paise`);
   }
 
-  const refund = await razorpayInstance.payments.refund(paymentId, {
+  logger.info('Razorpay createRefund params', {
+    paymentId,
+    amountPaise,
+    notes: notes || 'TripMe refund',
+  });
+
+  const payload = {
+    payment_id: paymentId,
     amount: amountPaise,
-    speed: 'normal',
     notes: {
-      reason: notes || 'TripMe refund',
-      ...meta
+      reason: notes || 'TripMe refund'
     }
+  };
+
+  logger.info('Razorpay createRefund HTTP payload', {
+    endpoint: '/refunds',
+    payload
+  });
+
+  // Use direct HTTP request to bypass SDK normalizeError / TLS bugs
+  const refund = await razorpayHttpRequest(
+    '/refunds',
+    'POST',
+    payload
+  );
+
+  logger.info('Razorpay refund created', {
+    refundId: refund.id,
+    status: refund.status,
+    amount: refund.amount,
   });
 
   return {
@@ -242,7 +272,7 @@ async function createRefund(paymentId, amount, notes = '', meta = {}) {
     currency: refund.currency,
     status: refund.status,
     paymentId: refund.payment_id,
-    rawRefund: refund
+    rawRefund: refund,
   };
 }
 

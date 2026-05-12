@@ -11,7 +11,7 @@ const propertySchema = new mongoose.Schema({
   description: {
     type: String,
     required: [true, 'Please enter a description'],
-    maxlength: [2000, 'Description cannot exceed 2000 characters']
+    maxlength: [5000, 'Description cannot exceed 5000 characters']
   },
   host: {
     type: mongoose.Schema.Types.ObjectId,
@@ -136,6 +136,11 @@ const propertySchema = new mongoose.Schema({
     extraGuestPrice: {
       type: Number,
       default: 0
+    },
+    includedGuests: {
+      type: Number,
+      default: 1,
+      min: [1, 'At least 1 guest must be included in the base price']
     },
     cleaningFee: {
       type: Number,

@@ -10,7 +10,7 @@ const serviceSchema = new mongoose.Schema({
   description: {
     type: String,
     required: [true, 'Please enter a description'],
-    maxlength: [500, 'Description cannot exceed 500 characters']
+    maxlength: [5000, 'Description cannot exceed 5000 characters']
   },
   provider: {
     type: mongoose.Schema.Types.ObjectId,
@@ -96,6 +96,10 @@ const serviceSchema = new mongoose.Schema({
     currency: {
       type: String,
       default: 'INR'
+    },
+    includedGuests: {
+      type: Number,
+      default: 1
     }
   },
   cancellationPolicy: {

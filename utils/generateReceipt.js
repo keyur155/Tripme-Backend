@@ -1,4 +1,4 @@
-const generateReceipt = (booking, payment = null) => {
+const generateReceipt = (booking, payment = null, showCommission = false) => {
   const formatCurrency = (amount, currency = 'INR') => {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -14,10 +14,24 @@ const generateReceipt = (booking, payment = null) => {
     });
   };
 
+  const formatTime = (timeStr) => {
+    if (!timeStr) return null;
+    try {
+      const [hours, minutes] = timeStr.split(':');
+      const h = parseInt(hours);
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      const formattedHours = h % 12 || 12;
+      return `${formattedHours}:${minutes} ${ampm}`;
+    } catch (e) {
+      return timeStr;
+    }
+  };
+
   const receipt = {
     receiptId: booking.receiptId,
     bookingId: booking._id,
     generatedAt: new Date(),
+    showCommission,
     
     // Booking Details
     bookingDetails: {
@@ -25,6 +39,8 @@ const generateReceipt = (booking, payment = null) => {
       status: booking.status,
       checkIn: booking.checkIn ? formatDate(booking.checkIn) : null,
       checkOut: booking.checkOut ? formatDate(booking.checkOut) : null,
+      checkInTime: formatTime(booking.checkInTime),
+      checkOutTime: formatTime(booking.checkOutTime),
       timeSlot: booking.timeSlot ? {
         startTime: new Date(booking.timeSlot.startTime).toLocaleString('en-IN'),
         endTime: new Date(booking.timeSlot.endTime).toLocaleString('en-IN')
@@ -152,14 +168,14 @@ const generateReceiptHTML = (receipt) => {
           ${receipt.bookingDetails.checkIn ? `
           <div class="row">
             <span class="label">Check-in:</span>
-            <span class="value">${receipt.bookingDetails.checkIn}</span>
+            <span class="value">${receipt.bookingDetails.checkIn} ${receipt.bookingDetails.type === 'property' && receipt.bookingDetails.checkInTime ? `(${receipt.bookingDetails.checkInTime})` : ''}</span>
           </div>
           <div class="row">
             <span class="label">Check-out:</span>
-            <span class="value">${receipt.bookingDetails.checkOut}</span>
+            <span class="value">${receipt.bookingDetails.checkOut} ${receipt.bookingDetails.type === 'property' && receipt.bookingDetails.checkOutTime ? `(${receipt.bookingDetails.checkOutTime})` : ''}</span>
           </div>
           ` : ''}
-          ${receipt.bookingDetails.timeSlot ? `
+          ${receipt.bookingDetails.type !== 'property' && receipt.bookingDetails.timeSlot ? `
           <div class="row">
             <span class="label">Time Slot:</span>
             <span class="value">${receipt.bookingDetails.timeSlot.startTime} - ${receipt.bookingDetails.timeSlot.endTime}</span>
@@ -207,7 +223,7 @@ const generateReceiptHTML = (receipt) => {
             <span class="value">${formatCurrency(receipt.paymentBreakdown.securityDeposit, receipt.paymentBreakdown.currency)}</span>
           </div>
           ` : ''}
-          ${receipt.paymentBreakdown.platformFee > 0 ? `
+          ${receipt.showCommission && receipt.paymentBreakdown.platformFee > 0 ? `
           <div class="row">
             <span class="label">Platform Fee (15%):</span>
             <span class="value">${formatCurrency(receipt.paymentBreakdown.platformFee, receipt.paymentBreakdown.currency)}</span>
@@ -225,7 +241,7 @@ const generateReceiptHTML = (receipt) => {
           </div>
         </div>
 
-        ${receipt.commissionBreakdown.hostEarning > 0 ? `
+        ${receipt.showCommission && receipt.commissionBreakdown.hostEarning > 0 ? `
         <div class="section">
           <div class="section-title">Host Earning</div>
           <div class="host-earning">

@@ -6,7 +6,7 @@ const User = require('../models/User');
 // Helper for dynamic population
 const populateWishlistItems = {
   path: 'items.itemId',
-  select: 'title images price location category description',
+  select: 'title images price location category description badges adminBadges',
   model: 'Property'
   // model: function(doc) {
   //   return doc.itemType === 'Property' ? 'Property' : 'Service';
@@ -265,10 +265,10 @@ const addToWishlist = async (req, res) => {
 for (const item of wishlist.items) {
   if (item.itemType === 'Property') {
     item.itemDetails = await Property.findById(item.itemId)
-      .select('title images price location category description');
+      .select('title images price location category description badges adminBadges');
   } else if (item.itemType === 'Service') {
     item.itemDetails = await Service.findById(item.itemId)
-      .select('title images price location category description');
+      .select('title images price location category description badges adminBadges');
   }
 }
 

@@ -86,7 +86,7 @@ class PaymentService {
         serviceFee: booking.serviceFee || 0,
         securityDeposit: booking.securityDeposit || 0,
         extraGuestPrice: booking.listing?.pricing?.extraGuestPrice || booking.service?.pricing?.perPersonPrice || 0,
-        extraGuests: booking.guests?.adults > 1 ? booking.guests.adults - 1 : 0,
+        extraGuests: booking.guests?.adults > (booking.listing?.pricing?.includedGuests || 1) ? booking.guests.adults - (booking.listing?.pricing?.includedGuests || 1) : 0,
         hourlyExtension: booking.hourlyExtension?.cost || 0,
         discountAmount: booking.discountAmount || 0,
         currency: booking.currency || 'INR'

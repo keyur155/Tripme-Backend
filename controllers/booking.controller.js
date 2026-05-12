@@ -417,7 +417,7 @@ const processPaymentAndCreateBooking = async (req, res) => {
           serviceFee: listing?.pricing?.serviceFee || service?.pricing?.serviceFee || 0,
           securityDeposit: listing?.pricing?.securityDeposit || service?.pricing?.securityDeposit || 0,
           extraGuestPrice: listing?.pricing?.extraGuestPrice || service?.pricing?.perPersonPrice || 0,
-          extraGuests: guests?.adults > 1 ? guests.adults - 1 : 0,
+          extraGuests: guests?.adults > (listing?.pricing?.includedGuests || 1) ? guests.adults - (listing?.pricing?.includedGuests || 1) : 0,
           hourlyExtension: hourlyExtension?.cost || 0,
           discountAmount: 0, // Will be calculated later
           currency: currency
@@ -527,7 +527,7 @@ const processPaymentAndCreateBooking = async (req, res) => {
           pricingParams.cleaningFee = listing.pricing.cleaningFee || 0;
           pricingParams.serviceFee = listing.pricing.serviceFee || 0; // Use property's service fee or 0
           pricingParams.securityDeposit = listing.pricing.securityDeposit || 0;
-          pricingParams.extraGuests = guests.adults > 1 ? guests.adults - 1 : 0;
+          pricingParams.extraGuests = guests.adults > (listing.pricing.includedGuests || 1) ? guests.adults - (listing.pricing.includedGuests || 1) : 0;
 
           // Add extension cost if applicable
           if (extensionHours && extensionHours > 0) {
@@ -560,7 +560,7 @@ const processPaymentAndCreateBooking = async (req, res) => {
           const diffTime = checkOutDateOnly - checkInDateOnly;
           const diffDays = diffTime / (1000 * 60 * 60 * 24);
           pricingParams.nights = Math.max(0, diffDays);
-          pricingParams.extraGuests = guests.adults > 1 ? guests.adults - 1 : 0;
+          pricingParams.extraGuests = guests.adults > (listing.pricing.includedGuests || 1) ? guests.adults - (listing.pricing.includedGuests || 1) : 0;
 
           // Add hourly extension cost if applicable
           if (hourlyExtension && hourlyExtension.hours && listing.hourlyBooking?.enabled) {
@@ -571,7 +571,7 @@ const processPaymentAndCreateBooking = async (req, res) => {
       } else {
         pricingParams.basePrice = service.pricing.basePrice;
         pricingParams.serviceFee = service.pricing.serviceFee || 0;
-        pricingParams.extraGuests = guests.adults > 1 ? guests.adults - 1 : 0;
+        pricingParams.extraGuests = guests.adults > (service.pricing?.includedGuests || 1) ? guests.adults - (service.pricing?.includedGuests || 1) : 0;
         pricingParams.extraGuestPrice = service.pricing.perPersonPrice || 0;
       }
 
@@ -1921,6 +1921,8 @@ const createBooking = async (req, res) => {
         guestName: req.user.name,
         checkIn: actualListingId ? new Date(checkIn).toLocaleDateString() : new Date(timeSlot.startTime).toLocaleDateString(),
         checkOut: actualListingId ? new Date(checkOut).toLocaleDateString() : new Date(timeSlot.endTime).toLocaleDateString(),
+        checkInTime: booking.checkInTime,
+        checkOutTime: booking.checkOutTime,
         guests: `${guestDetails.adults} adults${guestDetails.children > 0 ? `, ${guestDetails.children} children` : ''}${guestDetails.infants > 0 ? `, ${guestDetails.infants} infants` : ''}`,
         totalAmount: totalAmount.toLocaleString(),
         bookingId: booking._id.toString(),
@@ -1939,6 +1941,8 @@ const createBooking = async (req, res) => {
         propertyName: listing ? listing.title : service.title,
         checkIn: actualListingId ? new Date(checkIn).toLocaleDateString() : new Date(timeSlot.startTime).toLocaleDateString(),
         checkOut: actualListingId ? new Date(checkOut).toLocaleDateString() : new Date(timeSlot.endTime).toLocaleDateString(),
+        checkInTime: booking.checkInTime,
+        checkOutTime: booking.checkOutTime,
         guests: `${guestDetails.adults} adults${guestDetails.children > 0 ? `, ${guestDetails.children} children` : ''}${guestDetails.infants > 0 ? `, ${guestDetails.infants} infants` : ''}`,
         totalAmount: totalAmount.toLocaleString(),
         bookingId: booking._id.toString()
@@ -2197,7 +2201,8 @@ const downloadReceipt = async (req, res) => {
     }
 
     // Generate receipt
-    const receipt = generateReceipt(booking, booking.payment);
+    const showCommission = isHost || isAdmin;
+    const receipt = generateReceipt(booking, booking.payment, showCommission);
     const receiptHTML = generateReceiptHTML(receipt);
 
     // Set response headers for PDF download
@@ -2539,6 +2544,8 @@ const updateBookingStatus = async (req, res) => {
     const booking = await Booking.findById(id)
       .populate('user', 'name email')
       .populate('host', 'name email')
+      .populate('listing', 'title')
+      .populate('service', 'title')
       .populate('payment');
 
     if (!booking) {
@@ -2750,13 +2757,11 @@ const updateBookingStatus = async (req, res) => {
 
     // Send email notifications
     try {
-      const [guest, hostUser] = await Promise.all([
-        User.findById(booking.user),
-        User.findById(booking.host)
-      ]);
+      const guest = booking.user;
+      const hostUser = booking.host;
 
       const bookingDetails = {
-        propertyName: booking.listing ? booking.listing.title : booking.service.title,
+        propertyName: (booking.listing && booking.listing.title) || (booking.service && booking.service.title) || 'Booking',
         bookingId: booking._id.toString(),
         status: status,
         reason: reason || null
@@ -2800,6 +2805,14 @@ const updateBookingStatus = async (req, res) => {
             checkIn: booking.checkIn ? new Date(booking.checkIn).toLocaleDateString() : new Date(booking.timeSlot.startTime).toLocaleDateString(),
             checkOut: booking.checkOut ? new Date(booking.checkOut).toLocaleDateString() : new Date(booking.timeSlot.endTime).toLocaleDateString(),
             refundAmount: booking.refundAmount ? booking.refundAmount.toLocaleString() : '0'
+          });
+
+          // Notify Host
+          await sendGuestCancelledBookingEmail(hostUser.email, hostUser.name, {
+            ...bookingDetails,
+            guestName: guest.name,
+            checkIn: booking.checkIn,
+            checkOut: booking.checkOut
           });
         }
       } else if (status === 'completed' && isHost) {
@@ -3008,8 +3021,8 @@ const calculateBookingPrice = async (req, res) => {
         totalAmount = basePrice * nights;
 
         // Add extra guest charges
-        if (guests && guests.adults > 1) {
-          const extraGuests = guests.adults - 1;
+        if (guests && guests.adults > (listing.pricing.includedGuests || 1)) {
+          const extraGuests = guests.adults - (listing.pricing.includedGuests || 1);
           totalAmount += extraGuestPrice * extraGuests * nights;
         }
       }
@@ -3062,7 +3075,7 @@ const calculateBookingPrice = async (req, res) => {
 
     const breakdown = {
       basePrice: listing ? basePrice * nights : basePrice,
-      extraGuestPrice: listing && guests ? extraGuestPrice * (guests.adults - 1) * nights : 0,
+      extraGuestPrice: listing && guests ? extraGuestPrice * Math.max(0, guests.adults - (listing.pricing.includedGuests || 1)) * nights : 0,
       cleaningFee,
       serviceFee,
       discountAmount,
@@ -4541,7 +4554,7 @@ const calculateHourlyPrice = async (req, res) => {
         return Math.max(0, diffDays);
       })(),
       extraGuestPrice: property.pricing.extraGuestPrice || 0,
-      extraGuests: guests && guests.adults > 1 ? guests.adults - 1 : 0,
+      extraGuests: guests && guests.adults > (property.pricing.includedGuests || 1) ? guests.adults - (property.pricing.includedGuests || 1) : 0,
       cleaningFee: property.pricing.cleaningFee || 0,
       serviceFee: property.pricing.serviceFee || 0,
       securityDeposit: property.pricing.securityDeposit || 0,
@@ -5030,7 +5043,7 @@ const process24HourBooking = async (req, res) => {
       basePrice24Hour: property.pricing.basePrice24Hour || property.pricing.basePrice,
       totalHours,
       extraGuestPrice: property.pricing.extraGuestPrice,
-      extraGuests: guests.adults > 1 ? guests.adults - 1 : 0,
+      extraGuests: guests.adults > (property.pricing.includedGuests || 1) ? guests.adults - (property.pricing.includedGuests || 1) : 0,
       cleaningFee: property.pricing.cleaningFee,
       serviceFee: property.pricing.serviceFee,
       securityDeposit: property.pricing.securityDeposit,
