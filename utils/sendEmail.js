@@ -225,6 +225,21 @@ const emailTemplates = {
     )
   }),
 
+  // ── 3b. Welcome (Google Signup — no verification needed) ─────────────────
+  welcomeGoogle: (userName) => ({
+    subject: 'Welcome to TripMe!',
+    html: wrapLayout(
+      BRAND.color, '✨', 'Welcome to TripMe!', 'Your adventure begins here',
+      greeting(userName) +
+      paragraph('Thank you for joining TripMe! Your account is ready to go. Start exploring amazing stays, unique experiences, and incredible destinations.') +
+      alertBox('#ECFDF5', '#A7F3D0', '#065F46', '🚀', 'What You Can Do',
+        'Browse trending destinations, book your dream stay, save favourites to your wishlist, or become a host and start earning.') +
+      ctaButton(`${process.env.FRONTEND_URL?.split(',')[0] || 'https://tripmeglobal.com'}`, 'Explore TripMe', BRAND.color) +
+      divider() +
+      paragraph('If you have any questions, our support team is always happy to help.')
+    )
+  }),
+
   // ── 4. Booking Confirmation (to Guest) ──────────────────────────────────
   bookingConfirmation: (userName, details) => ({
     subject: `Booking Request Submitted — ${details.propertyName}`,
@@ -718,6 +733,9 @@ const sendPasswordResetEmail = async (email, userName, resetLink) =>
 const sendEmailVerifiedEmail = async (email, userName) =>
   sendEmail(email, 'emailVerified', { userName });
 
+const sendWelcomeGoogleEmail = async (email, userName) =>
+  sendEmail(email, 'welcomeGoogle', { userName });
+
 const sendBookingConfirmationEmail = async (email, userName, bookingDetails) =>
   sendEmail(email, 'bookingConfirmation', { userName, ...bookingDetails });
 
@@ -843,6 +861,7 @@ module.exports = {
   sendWelcomeEmail,
   sendPasswordResetEmail,
   sendEmailVerifiedEmail,
+  sendWelcomeGoogleEmail,
   sendBookingConfirmationEmail,
   sendNewBookingNotificationEmail,
   sendBookingCancellationEmail,

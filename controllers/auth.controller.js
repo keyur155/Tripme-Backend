@@ -3,7 +3,7 @@ const Admin = require('../models/Admin');
 const VerificationToken = require('../models/VerificationToken');
 const Session = require('../models/Session');
 const { generateToken } = require('../utils/generateToken');
-const { sendEmail, sendWelcomeEmail, sendPasswordResetEmail, sendEmailVerifiedEmail } = require('../utils/sendEmail');
+const { sendEmail, sendWelcomeEmail, sendPasswordResetEmail, sendEmailVerifiedEmail, sendWelcomeGoogleEmail } = require('../utils/sendEmail');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 // Google OAuth client
@@ -575,7 +575,7 @@ const socialLogin = async (req, res) => {
           });
 
           // Send welcome email to new Google signup users
-          sendEmailVerifiedEmail(user.email, user.name).catch(err =>
+          sendWelcomeGoogleEmail(user.email, user.name).catch(err =>
             console.error('Error sending welcome email for Google signup:', err.message)
           );
           
