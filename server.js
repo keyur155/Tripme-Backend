@@ -146,6 +146,55 @@ app.get('/api/public/platform-fee', async (req, res) => {
   }
 });
 
+// ── Test email endpoint (for debugging — remove in production) ──
+app.post('/api/test-email', async (req, res) => {
+  try {
+    const { to } = req.body;
+    if (!to) {
+      return res.status(400).json({ success: false, message: 'Missing "to" field' });
+    }
+
+    logger.info('Test email requested', { to });
+
+    console.log('📧 ═══════════════════════════════════════');
+    console.log('📧 TEST EMAIL ENDPOINT HIT');
+    console.log('📧 RESEND_API_KEY set:', !!process.env.RESEND_API_KEY);
+    console.log('📧 RESEND_FROM:', process.env.RESEND_FROM || '(not set, using default)');
+    console.log('📧 SMTP_HOST:', process.env.SMTP_HOST || '(not set)');
+    console.log('📧 ═══════════════════════════════════════');
+
+    const { sendEmail } = require('./utils/sendEmail');
+    const result = await sendEmail(to, 'welcome', {
+      userName: 'Test User',
+      link: 'https://tripmeglobal.com/auth/verify-email?token=test-token-12345'
+    });
+
+    console.log('📧 sendEmail result:', JSON.stringify(result));
+
+    res.status(200).json({
+      success: true,
+      message: `Test email sent to ${to}`,
+      result,
+      config: {
+        resendKeySet: !!process.env.RESEND_API_KEY,
+        resendFrom: process.env.RESEND_FROM || '(default: onboarding@resend.dev)',
+        smtpHost: process.env.SMTP_HOST || '(not set)',
+      }
+    });
+  } catch (error) {
+    console.error('📧 ❌ Test email error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      config: {
+        resendKeySet: !!process.env.RESEND_API_KEY,
+        resendFrom: process.env.RESEND_FROM || '(default: onboarding@resend.dev)',
+        smtpHost: process.env.SMTP_HOST || '(not set)',
+      }
+    });
+  }
+});
+
 // ── Swagger / OpenAPI docs ─────────────────────────────────
 const { setupSwagger } = require('./config/swagger');
 setupSwagger(app);

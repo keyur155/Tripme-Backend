@@ -14,6 +14,16 @@ const sendViaResend = (to, subject, html) =>
     const from =
       process.env.RESEND_FROM ||
       'TripMe <onboarding@resend.dev>';
+
+    console.log('📧 ═══════════════════════════════════════');
+    console.log('📧 RESEND EMAIL ATTEMPT');
+    console.log('📧 To:', to);
+    console.log('📧 From:', from);
+    console.log('📧 Subject:', subject);
+    console.log('📧 API Key present:', !!process.env.RESEND_API_KEY);
+    console.log('📧 API Key prefix:', process.env.RESEND_API_KEY?.substring(0, 10) + '...');
+    console.log('📧 ═══════════════════════════════════════');
+
     const payload = JSON.stringify({ from, to, subject, html });
     const options = {
       hostname: 'api.resend.com',
@@ -29,20 +39,27 @@ const sendViaResend = (to, subject, html) =>
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
+        console.log('📧 Resend response status:', res.statusCode);
+        console.log('📧 Resend response body:', data);
         try {
           const parsed = JSON.parse(data);
           if (res.statusCode >= 200 && res.statusCode < 300) {
-            console.log('Email sent via Resend:', parsed.id);
+            console.log('📧 ✅ Email sent successfully via Resend! ID:', parsed.id);
             resolve({ messageId: parsed.id, accepted: [to], rejected: [] });
           } else {
+            console.log('📧 ❌ Resend API rejected:', parsed.message || data);
             reject(new Error(`Resend API error ${res.statusCode}: ${data}`));
           }
         } catch (e) {
+          console.log('📧 ❌ Failed to parse Resend response:', data);
           reject(new Error('Failed to parse Resend API response'));
         }
       });
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      console.log('📧 ❌ Network error calling Resend:', err.message);
+      reject(err);
+    });
     req.write(payload);
     req.end();
   });
