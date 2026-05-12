@@ -573,6 +573,11 @@ const socialLogin = async (req, res) => {
             'socialLogins.googleId': googleId,
             role: 'guest'
           });
+
+          // Send welcome email to new Google signup users
+          sendEmailVerifiedEmail(user.email, user.name).catch(err =>
+            console.error('Error sending welcome email for Google signup:', err.message)
+          );
           
         } else {
           // Update existing user's Google ID if not set
