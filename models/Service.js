@@ -100,6 +100,39 @@ const serviceSchema = new mongoose.Schema({
     includedGuests: {
       type: Number,
       default: 1
+    },
+    // GST support per service
+    gstRate: {
+      type: Number,
+      default: null // null = use default rate based on serviceType
+    },
+    taxable: {
+      type: Boolean,
+      default: true
+    }
+  },
+  // Slot-based booking configuration
+  slotBooking: {
+    enabled: {
+      type: Boolean,
+      default: false
+    },
+    // Default slots (templates for generating ServiceSlot documents)
+    defaultSlots: [{
+      startTime: { type: String, required: true }, // "08:00"
+      endTime: { type: String, required: true },   // "10:00"
+      capacity: { type: Number, default: 1 },
+      label: { type: String } // "Morning Pickup", "Afternoon Session"
+    }],
+    // How far in advance slots can be booked (days)
+    advanceBookingDays: {
+      type: Number,
+      default: 30
+    },
+    // Auto-generate slots for upcoming days
+    autoGenerateSlots: {
+      type: Boolean,
+      default: true
     }
   },
   cancellationPolicy: {

@@ -237,6 +237,7 @@ const bookingSchema = new mongoose.Schema({
   pricingBreakdown: {
     customerBreakdown: {
       baseAmount: Number,
+      extraGuestCost: Number,
       cleaningFee: Number,
       serviceFee: Number,
       securityDeposit: Number,
@@ -244,8 +245,15 @@ const bookingSchema = new mongoose.Schema({
       discountAmount: Number,
       subtotal: Number,
       platformFee: Number,
+      propertyGST: Number,
       gst: Number,
       processingFee: Number,
+      propertyTotal: Number,
+      addonSubtotal: Number,
+      addonGST: Number,
+      addonTotal: Number,
+      addonServicesTotal: Number,
+      totalGST: Number,
       totalAmount: Number
     },
     hostBreakdown: {
@@ -262,9 +270,70 @@ const bookingSchema = new mongoose.Schema({
     platformBreakdown: {
       platformFee: Number,
       processingFee: Number,
+      propertyGST: Number,
+      addonGST: Number,
+      totalGST: Number,
       gst: Number,
       platformRevenue: Number
     }
+  },
+  // ════════════════════════════════════════════════════════════════════════════
+  // ADDON SERVICES - Area services selected during booking
+  // ════════════════════════════════════════════════════════════════════════════
+  addonServices: [{
+    service: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Service',
+      required: true
+    },
+    title: String,
+    serviceType: String,
+    quantity: {
+      type: Number,
+      default: 1,
+      min: 1
+    },
+    unitPrice: {
+      type: Number,
+      required: true
+    },
+    lineTotal: {
+      type: Number,
+      required: true
+    },
+    pricingType: {
+      type: String,
+      enum: ['fixed', 'per-day', 'per-guest'],
+      default: 'fixed'
+    },
+    pricingLabel: String,
+    gstRate: {
+      type: Number,
+      default: 0.18
+    },
+    gstAmount: {
+      type: Number,
+      default: 0
+    },
+    totalWithGST: {
+      type: Number,
+      default: 0
+    },
+    selectedSlot: {
+      slotId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceSlot' },
+      date: Date,
+      startTime: String,
+      endTime: String
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'confirmed', 'cancelled', 'completed'],
+      default: 'pending'
+    }
+  }],
+  addonServicesTotal: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true,

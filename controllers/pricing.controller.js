@@ -3,6 +3,7 @@ const PricingConfig = require('../models/PricingConfig');
 const Coupon = require('../models/Coupon');
 const { calculate24HourPricing, calculatePricingBreakdown, calculateHourlyExtension } = require('../utils/pricingUtils');
 const { generatePricingToken } = require('../middlewares/pricingSecurity.middleware');
+const { calculateFullBookingPrice } = require('../services/pricing.service');
 
 // @desc    Get platform fee rate
 // @route   GET /api/pricing/platform-fee-rate
@@ -405,8 +406,118 @@ const validateCoupon = async (req, res) => {
   }
 };
 
+// @desc    Calculate full booking price including addons (live pricing for frontend)
+// @route   POST /api/pricing/calculate-full
+// @access  Public
+const calculateFullPrice = async (req, res) => {
+  try {
+    const {
+      propertyId,
+      checkIn,
+      checkOut,
+      guests,
+      couponCode,
+      hourlyExtension,
+      addonServices, // [{serviceId, quantity, selectedSlot}]
+      isLateCheckIn,
+      bookingDuration,
+      extensionHours
+    } = req.body;
+
+    if (!propertyId) {
+      return res.status(400).json({ success: false, message: 'propertyId is required' });
+    }
+
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({ success: false, message: 'Property not found' });
+    }
+
+    const checkInDate = new Date(checkIn);
+    const checkOutDate = new Date(checkOut);
+    const checkInDateOnly = new Date(checkInDate.getFullYear(), checkInDate.getMonth(), checkInDate.getDate());
+    const checkOutDateOnly = new Date(checkOutDate.getFullYear(), checkOutDate.getMonth(), checkOutDate.getDate());
+    const nights = Math.max(1, (checkOutDateOnly - checkInDateOnly) / (1000 * 60 * 60 * 24));
+
+    const guestsObj = typeof guests === 'object' ? guests : { adults: guests || 1 };
+    const effectiveBasePrice = (isLateCheckIn && property.pricing?.basePrice24Hour)
+      ? property.pricing.basePrice24Hour
+      : property.pricing?.basePrice || 0;
+
+    // Apply coupon
+    let discountAmount = 0;
+    if (couponCode) {
+      try {
+        const coupon = await Coupon.findOne({
+          code: couponCode.toUpperCase(),
+          isActive: true,
+          validFrom: { $lte: new Date() },
+          validTo: { $gte: new Date() }
+        });
+        if (coupon) {
+          const baseSubtotal = effectiveBasePrice * nights;
+          if (coupon.discountType === 'percentage') {
+            discountAmount = (baseSubtotal * coupon.amount) / 100;
+            const maxDiscount = coupon.maxDiscount || discountAmount;
+            discountAmount = Math.min(discountAmount, maxDiscount);
+          } else {
+            discountAmount = Math.min(coupon.amount, baseSubtotal);
+          }
+        }
+      } catch (_e) { /* ignore coupon errors */ }
+    }
+
+    let extensionCost = 0;
+    if (hourlyExtension && property.hourlyBooking?.enabled) {
+      extensionCost = calculateHourlyExtension(effectiveBasePrice, typeof hourlyExtension === 'object' ? hourlyExtension.hours : hourlyExtension);
+    }
+
+    const fullPricing = await calculateFullBookingPrice({
+      basePrice: effectiveBasePrice,
+      nights,
+      cleaningFee: property.pricing?.cleaningFee || 0,
+      serviceFee: property.pricing?.serviceFee || 0,
+      securityDeposit: property.pricing?.securityDeposit || 0,
+      extraGuestPrice: property.pricing?.extraGuestPrice || 0,
+      extraGuests: guestsObj.adults > (property.pricing?.includedGuests || 1)
+        ? guestsObj.adults - (property.pricing?.includedGuests || 1) : 0,
+      hourlyExtension: extensionCost,
+      discountAmount,
+      currency: property.pricing?.currency || 'INR',
+      addonServices: addonServices || [],
+      bookingContext: { checkIn, checkOut, guests: guestsObj, nights }
+    });
+
+    // Generate pricing token for the grand total (property + addons)
+    const pricingToken = generatePricingToken({
+      propertyId,
+      checkIn: checkIn,
+      checkOut: checkOut,
+      guests: guestsObj,
+      nights,
+      totalAmount: fullPricing.propertyTotal // Token is for property total only
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        pricing: fullPricing,
+        pricingToken,
+        calculatedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Error calculating full price:', error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Error calculating price'
+    });
+  }
+};
+
 module.exports = {
   getPlatformFeeRate,
   calculatePricing,
-  validateCoupon
+  validateCoupon,
+  calculateFullPrice
 };

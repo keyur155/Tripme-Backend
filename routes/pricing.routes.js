@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getPlatformFeeRate, calculatePricing, validateCoupon } = require('../controllers/pricing.controller');
+const { getPlatformFeeRate, calculatePricing, validateCoupon, calculateFullPrice } = require('../controllers/pricing.controller');
 
 /**
  * @desc    Calculate pricing for property booking
@@ -22,5 +22,12 @@ router.get('/platform-fee-rate', getPlatformFeeRate);
  * @access  Public
  */
 router.post('/validate-coupon', validateCoupon);
+
+/**
+ * @desc    Calculate full booking price including addon services
+ * @route   POST /api/pricing/calculate-full
+ * @access  Public (live pricing for booking flow)
+ */
+router.post('/calculate-full', calculateFullPrice);
 
 module.exports = router;

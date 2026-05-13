@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const serviceController = require('../controllers/service.controller');
+const serviceRecommendationController = require('../controllers/serviceRecommendation.controller');
+const serviceSlotController = require('../controllers/serviceSlot.controller');
 const { auth, optionalAuth } = require('../middlewares/auth.middleware');
 const { validateService, validateServiceUpdate } = require('../validations/service.validation');
 const AuthorizationMiddleware = require('../middlewares/authorization.middleware');
@@ -10,8 +12,17 @@ router.get('/', serviceController.getServices);
 router.get('/search', serviceController.searchServices);
 router.get('/categories', serviceController.getServiceCategories);
 
+// Recommendation engine routes (public - used during booking flow)
+router.get('/recommended', serviceRecommendationController.getRecommendedServices);
+router.post('/calculate-addon-total', serviceRecommendationController.calculateAddonTotal);
+router.post('/validate-addons', serviceRecommendationController.validateAddons);
+
 // Protected routes (require authentication)
 router.get('/my-services', auth, serviceController.getMyServices);
+
+// Slot-based booking routes (public - used during booking flow)
+router.get('/:id/slots', serviceSlotController.getAvailableSlots);
+router.post('/:id/slots/check', serviceSlotController.checkSlotAvailability);
 
 // Public parameterized routes
 router.get('/:id', optionalAuth, serviceController.getService);
@@ -57,5 +68,8 @@ router.patch('/:id/visibility', AuthorizationMiddleware.isServiceProvider, servi
 // Service bookings and orders
 router.get('/:id/bookings', serviceController.getServiceBookings);
 router.post('/:id/book', serviceController.bookService);
+
+// Slot management (provider only)
+router.post('/:id/slots/manage', AuthorizationMiddleware.isServiceProvider, serviceSlotController.manageSlots);
 
 module.exports = router; 

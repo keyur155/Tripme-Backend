@@ -9,6 +9,12 @@ const crypto = require('crypto');
 const https = require('https');
 const { logger } = require('../config/logger');
 
+// SSL certificate bypass for development (corporate proxies, self-signed certs)
+// WARNING: Only use in development, never in production!
+if (process.env.NODE_ENV !== 'production') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 // Direct HTTP call to Razorpay API (bypasses SDK issues)
 async function razorpayHttpRequest(endpoint, method, data) {
   const keyId = process.env.RAZORPAY_KEY_ID;
